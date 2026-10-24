@@ -33,3 +33,7 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.isort]
+# Explicit, so CI (fresh checkout) and local runs sort imports identically.
+known-first-party = ["pve_dashboard_mcp", "tests"]
