@@ -5,11 +5,15 @@ services:
     container_name: proxmox-dashboard
     restart: unless-stopped
     env_file: .env
+    environment:
+      VM_URL: ${VM_URL:-http://victoriametrics:8428}
     ports:
       - "${DASHBOARD_PORT:-8080}:8000"
     volumes:
       # Optional: CA certificate of your Proxmox cluster (PVE_n_CA_FILE=/certs/pve-root-ca.pem)
       - ./certs:/certs:ro
+    depends_on:
+      - victoriametrics
     # Hardening: nothing in the container needs to write outside /tmp or gain privileges.
     read_only: true
     tmpfs:
@@ -18,8 +22,28 @@ services:
       - ALL
     security_opt:
       - no-new-privileges:true
-    logging:
+    logging: &logging
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
+
+  victoriametrics:
+    image: victoriametrics/victoria-metrics:v1.153.0
+    container_name: proxmox-dashboard-vm
+    restart: unless-stopped
+    command:
+      - -storageDataPath=/storage
+      - -retentionPeriod=${VM_RETENTION:-400d}
+      # Only the dashboard writes; no need for the other ingestion protocols.
+      - -httpListenAddr=:8428
+    volumes:
+      - vm-data:/storage
+    # Not published: only reachable from the dashboard container.
+    # Uncomment for Grafana or debugging:
+    # ports:
+    #   - "127.0.0.1:8428:8428"
+    logging: *logging
+
+volumes:
+  vm-data:

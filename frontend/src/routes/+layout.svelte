@@ -12,7 +12,9 @@
 	const nav = [
 		{ href: '/', label: 'Übersicht', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
 		{ href: '/nodes', label: 'Nodes', icon: 'M4 5h16v5H4zM4 14h16v5H4zM8 7.5h.01M8 16.5h.01' },
-		{ href: '/guests', label: 'Gäste', icon: 'M4 6h16M4 12h16M4 18h16' }
+		{ href: '/guests', label: 'Gäste', icon: 'M4 6h16M4 12h16M4 18h16' },
+		{ href: '/analysis', label: 'Lastanalyse', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
+		{ href: '/inventory', label: 'Inventar', icon: 'M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7M12 11v10' }
 	];
 
 	let dark = $state(true);

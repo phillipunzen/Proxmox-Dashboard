@@ -11,6 +11,8 @@ from app.collector.builder import CounterSample, build_snapshot
 from app.collector.state import SnapshotStore
 from app.config import ClusterConfig, Settings
 from app.pve import PveApi
+from app.tsdb.client import TsdbClient
+from app.tsdb.metrics import snapshot_lines
 
 log = logging.getLogger(__name__)
 
@@ -25,8 +27,9 @@ class ClusterPoller:
     """
 
     def __init__(self, cfg: ClusterConfig, client: PveApi, store: SnapshotStore, settings: Settings,
-                 clock: Any = time.time):
+                 clock: Any = time.time, tsdb: TsdbClient | None = None):
         self.cfg = cfg
+        self.tsdb = tsdb
         self.client = client
         self.store = store
         self.settings = settings
@@ -56,6 +59,8 @@ class ClusterPoller:
             self._mark_unreachable(str(exc))
             return
         self.store.publish(snap)
+        if self.tsdb:
+            self.tsdb.enqueue(snapshot_lines(snap))
 
     async def _refresh_node_status(self, resources: list[dict[str, Any]]) -> None:
         online = [r["node"] for r in resources
@@ -99,8 +104,9 @@ class Collector:
     """Owns one poller task per cluster."""
 
     def __init__(self, clusters: list[ClusterConfig], clients: dict[str, PveApi],
-                 store: SnapshotStore, settings: Settings):
-        self.pollers = [ClusterPoller(c, clients[c.name], store, settings) for c in clusters]
+                 store: SnapshotStore, settings: Settings, tsdb: TsdbClient | None = None):
+        self.pollers = [ClusterPoller(c, clients[c.name], store, settings, tsdb=tsdb)
+                        for c in clusters]
         self.clients = clients
         self._tasks: list[asyncio.Task[None]] = []
 

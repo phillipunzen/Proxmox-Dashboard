@@ -3,9 +3,13 @@
 	import { live } from '#lib/live.svelte.js';
 	import { bytes, num, pct, rate, ratio, uptime } from '#lib/format.js';
 	import { utilisationOption } from '#lib/charts.js';
+	import { getJson } from '#lib/api.js';
 	import Chart from '#lib/components/Chart.svelte';
+	import HistoryCharts from '#lib/components/HistoryCharts.svelte';
 	import Kpi from '#lib/components/Kpi.svelte';
+	import RangePicker from '#lib/components/RangePicker.svelte';
 	import StatusBadge from '#lib/components/StatusBadge.svelte';
+	import type { NodeHardware, RangeKey } from '#lib/types.js';
 
 	const cluster = $derived(live.clusters.find((c) => c.name === page.params.cluster));
 	const node = $derived(cluster?.nodes.find((n) => n.node === page.params.node));
@@ -18,6 +22,15 @@
 		(cluster?.storages ?? []).filter((s) => s.node === page.params.node)
 	);
 	const hist = $derived(live.history[`node:${page.params.cluster}/${page.params.node}`] ?? []);
+	let range = $state<RangeKey>('24h');
+	let hw = $state<NodeHardware | null>(null);
+
+	$effect(() => {
+		const path = `/api/v1/inventory/clusters/${encodeURIComponent(page.params.cluster ?? '')}/nodes/${encodeURIComponent(page.params.node ?? '')}`;
+		getJson<NodeHardware>(path)
+			.then((d) => (hw = d))
+			.catch(() => (hw = null));
+	});
 </script>
 
 <svelte:head><title>{page.params.node} · Proxmox Dashboard</title></svelte:head>
@@ -46,8 +59,25 @@
 
 	<div class="mt-4 grid gap-4 lg:grid-cols-3">
 		<div class="card lg:col-span-2">
-			<span class="label">Auslastung live</span>
-			<Chart option={utilisationOption(hist)} height="220px" />
+			{#if live.meta?.history}
+				<div class="mb-3 flex flex-wrap items-center justify-between gap-2">
+					<span class="label">Verlauf</span>
+					<a class="text-xs text-accent hover:underline" href="/analysis?cluster={encodeURIComponent(node.cluster)}&node={encodeURIComponent(node.node)}">Welche Gäste verursachen die Last? →</a>
+					<RangePicker bind:value={range} />
+				</div>
+				<HistoryCharts
+					path="/api/v1/history/clusters/{encodeURIComponent(node.cluster)}/nodes/{encodeURIComponent(node.node)}"
+					{range}
+					charts={[
+						{ title: 'CPU / RAM', unit: 'pct', max: 1, lines: [{ key: 'cpu', name: 'CPU' }, { key: 'mem', name: 'RAM' }] },
+						{ title: 'IO-Delay', unit: 'pct', height: '140px', lines: [{ key: 'iowait', name: 'IO-Delay', color: '#eab308' }] },
+						{ title: 'Netzwerk (Gäste)', unit: 'bps', height: '160px', lines: [{ key: 'netin', name: 'Eingang', color: '#10b981' }, { key: 'netout', name: 'Ausgang', color: '#a855f7' }] }
+					]}
+				/>
+			{:else}
+				<span class="label">Auslastung live</span>
+				<Chart option={utilisationOption(hist)} height="220px" />
+			{/if}
 		</div>
 		<div class="card text-sm">
 			<span class="label">System</span>
@@ -73,7 +103,7 @@
 				<tbody>
 					{#each guests as g (g.vmid)}
 						<tr class="border-t border-zinc-100 dark:border-zinc-800/60">
-							<td class="px-4 py-2"><span class="text-zinc-500">{g.vmid}</span> {g.name}</td>
+							<td class="px-4 py-2"><a href="/guests/{g.cluster}/{g.vmid}" class="hover:text-accent"><span class="text-zinc-500">{g.vmid}</span> {g.name}</a></td>
 							<td class="px-4 py-2 text-xs uppercase text-zinc-500">{g.type === 'qemu' ? 'VM' : 'LXC'}</td>
 							<td class="px-4 py-2"><StatusBadge status={g.status} /></td>
 							<td class="tabular px-4 py-2 text-right">{pct(g.cpu_host, 1)}</td>
@@ -99,4 +129,42 @@
 			</ul>
 		</div>
 	</div>
+
+	{#if hw}
+		<div class="card mt-4 overflow-x-auto">
+			<div class="flex items-center justify-between">
+				<span class="label">Hardware</span>
+				<a href="/inventory" class="text-xs text-accent hover:underline">Inventar →</a>
+			</div>
+			<div class="mt-3 grid gap-6 lg:grid-cols-3">
+				<div>
+					<div class="mb-1 text-xs text-zinc-500">Datenträger</div>
+					<ul class="space-y-1 text-sm">
+						{#each hw.disks as d (d.devpath)}
+							<li class="flex justify-between gap-2">
+								<span class="truncate">{d.model ?? d.devpath} <span class="text-xs text-zinc-500 uppercase">{d.type}</span></span>
+								<span class="text-xs whitespace-nowrap {d.health === 'FAILED' ? 'text-red-500' : 'text-zinc-500'}">{d.health ?? '?'}{d.wearout_used != null ? ` · ${d.wearout_used} %` : ''}</span>
+							</li>
+						{/each}
+					</ul>
+				</div>
+				<div>
+					<div class="mb-1 text-xs text-zinc-500">Netzwerk</div>
+					<ul class="space-y-1 font-mono text-xs">
+						{#each hw.network as i (i.iface)}
+							<li>{i.iface} <span class="text-zinc-500">{i.type}{i.cidr ? ` · ${i.cidr}` : ''}{[...i.bridge_ports, ...i.slaves].length ? ` → ${[...i.bridge_ports, ...i.slaves].join(' ')}` : ''}</span></li>
+						{/each}
+					</ul>
+				</div>
+				<div>
+					<div class="mb-1 text-xs text-zinc-500">PCI-Passthrough</div>
+					<ul class="space-y-1 text-sm">
+						{#each hw.pci.filter((p) => p.assigned_to.length) as p (p.id)}
+							<li>{p.device_name} <span class="text-xs text-zinc-500">→ {p.assigned_to.map((a) => `${a.vmid} ${a.name}`).join(', ')}</span></li>
+						{:else}<li class="text-zinc-500">keine</li>{/each}
+					</ul>
+				</div>
+			</div>
+		</div>
+	{/if}
 {/if}

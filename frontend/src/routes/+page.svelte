@@ -3,11 +3,15 @@
 	import { bytes, num, pct, rate, ratio, uptime } from '#lib/format.js';
 	import { networkOption, utilisationOption } from '#lib/charts.js';
 	import Chart from '#lib/components/Chart.svelte';
+	import HistoryCharts from '#lib/components/HistoryCharts.svelte';
+	import RangePicker from '#lib/components/RangePicker.svelte';
+	import type { RangeKey } from '#lib/types.js';
 	import Kpi from '#lib/components/Kpi.svelte';
 	import Meter from '#lib/components/Meter.svelte';
 	import StatusBadge from '#lib/components/StatusBadge.svelte';
 
 	const severityOrder = { critical: 0, warning: 1, info: 2 } as const;
+	let range = $state<RangeKey>('1h');
 </script>
 
 <svelte:head><title>Übersicht · Proxmox Dashboard</title></svelte:head>
@@ -97,12 +101,27 @@
 			<div class="grid gap-4 lg:grid-cols-3">
 				<!-- Live charts -->
 				<div class="card lg:col-span-2">
-					<div class="mb-2 flex items-center justify-between">
-						<span class="label">Auslastung live</span>
-						<span class="text-xs text-zinc-500">seit Seitenaufruf · Historie folgt in Phase 2</span>
-					</div>
-					<Chart option={utilisationOption(hist)} height="200px" />
-					<Chart option={networkOption(hist)} height="160px" />
+					{#if live.meta?.history}
+						<div class="mb-3 flex items-center justify-between gap-2">
+							<span class="label">Verlauf</span>
+							<RangePicker bind:value={range} />
+						</div>
+						<HistoryCharts
+							path="/api/v1/history/clusters/{encodeURIComponent(c.name)}"
+							{range}
+							charts={[
+								{ title: 'CPU / RAM', unit: 'pct', max: 1, lines: [{ key: 'cpu', name: 'CPU' }, { key: 'mem', name: 'RAM' }] },
+								{ title: 'Netzwerk (Summe Gäste)', unit: 'bps', height: '160px', lines: [{ key: 'netin', name: 'Eingang', color: '#10b981' }, { key: 'netout', name: 'Ausgang', color: '#a855f7' }] }
+							]}
+						/>
+					{:else}
+						<div class="mb-2 flex items-center justify-between">
+							<span class="label">Auslastung live</span>
+							<span class="text-xs text-zinc-500">seit Seitenaufruf · ohne VM_URL keine Historie</span>
+						</div>
+						<Chart option={utilisationOption(hist)} height="200px" />
+						<Chart option={networkOption(hist)} height="160px" />
+					{/if}
 				</div>
 
 				<div class="flex flex-col gap-4">
@@ -172,17 +191,17 @@
 					<ul class="mt-3 flex flex-col gap-3">
 						{#each topGuests as g (g.vmid)}
 							<li>
-								<Meter
+								<a href="/guests/{g.cluster}/{g.vmid}" class="block hover:text-accent"><Meter
 									label="{g.vmid} · {g.name} ({g.node})"
 									value={g.cpu_host}
 									text={pct(g.cpu_host, 1)}
 									warn={0.25}
 									crit={0.5}
-								/>
+								/></a>
 							</li>
 						{/each}
 					</ul>
-					<a href="/guests?sort=cpu_host" class="mt-4 inline-block text-sm text-accent hover:underline">Alle Gäste →</a>
+					<a href="/analysis?cluster={encodeURIComponent(c.name)}" class="mt-4 inline-block text-sm text-accent hover:underline">Lastanalyse →</a>
 				</div>
 			</div>
 		</section>

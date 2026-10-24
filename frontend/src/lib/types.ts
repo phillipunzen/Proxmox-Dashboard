@@ -124,5 +124,224 @@ export interface Meta {
 	mock: boolean;
 	read_only: boolean;
 	poll_interval: number;
+	history: boolean;
 	clusters: string[];
+}
+
+// --- Phase 2: history, analysis, inventory -------------------------------------------------
+
+export type RangeKey = '1h' | '6h' | '24h' | '7d' | '30d';
+export type AnalysisMetric = 'cpu' | 'mem' | 'diskread' | 'diskwrite' | 'netin' | 'netout';
+export type Pt = [number, number]; // [unix seconds, value]
+
+export interface SeriesSet {
+	start: number;
+	end: number;
+	step: number;
+	series: Record<string, Pt[]>;
+}
+
+export interface GuestSeries {
+	vmid: number;
+	name: string;
+	type: string;
+	cluster: string | null;
+	avg: number;
+	max: number;
+	points: Pt[];
+}
+
+export interface Contribution {
+	metric: AnalysisMetric;
+	unit: 'cores' | 'bytes' | 'bps';
+	start: number;
+	end: number;
+	step: number;
+	total: Pt[];
+	capacity: Pt[] | null;
+	guests: GuestSeries[];
+	other: Pt[];
+	other_count: number;
+}
+
+export interface RankedGuest {
+	cluster: string;
+	vmid: number;
+	name: string;
+	type: string;
+	node: string | null;
+	value: number;
+	share_of_total: number | null;
+	share_of_capacity: number | null;
+}
+
+export interface Ranking {
+	metric: AnalysisMetric;
+	unit: 'cores' | 'bytes' | 'bps';
+	at: number;
+	window: number;
+	total: number | null;
+	capacity: number | null;
+	guests: RankedGuest[];
+}
+
+export interface TopGuest {
+	cluster: string;
+	vmid: number;
+	name: string;
+	type: string;
+	node: string | null;
+	avg: number;
+	p95: number;
+	max: number;
+}
+
+export interface NodeAllocation {
+	cluster: string;
+	node: string;
+	online: boolean;
+	threads: number;
+	mem_total: number;
+	vcpus_running: number;
+	vcpus_configured: number;
+	mem_running: number;
+	mem_configured: number;
+	cpu_ratio_running: number | null;
+	cpu_ratio_configured: number | null;
+	mem_ratio_running: number | null;
+	mem_ratio_configured: number | null;
+}
+
+export interface Disk {
+	devpath: string;
+	model: string | null;
+	vendor: string | null;
+	serial: string | null;
+	wwn: string | null;
+	size: number;
+	type: string;
+	rpm: number | null;
+	health: string | null;
+	wearout_used: number | null;
+	used_by: string | null;
+}
+
+export interface NetIface {
+	iface: string;
+	type: string;
+	active: boolean;
+	autostart: boolean;
+	method: string | null;
+	cidr: string | null;
+	gateway: string | null;
+	cidr6: string | null;
+	bridge_ports: string[];
+	bridge_vlan_aware: boolean;
+	slaves: string[];
+	bond_mode: string | null;
+	vlan_id: number | null;
+	vlan_raw_device: string | null;
+	mtu: number | null;
+	comments: string | null;
+}
+
+export interface PciDevice {
+	id: string;
+	class_code: string | null;
+	class_name: string | null;
+	vendor_name: string | null;
+	device_name: string | null;
+	subsystem: string | null;
+	iommu_group: number | null;
+	mdev: boolean;
+	assigned_to: { cluster: string; vmid: number; name: string; key: string }[];
+}
+
+export interface NodeHardware {
+	cluster: string;
+	node: string;
+	online: boolean;
+	cpu_model: string | null;
+	cpu_sockets: number | null;
+	cpu_cores: number | null;
+	cpu_threads: number | null;
+	cpu_mhz: number | null;
+	mem_total: number | null;
+	kernel: string | null;
+	pve_version: string | null;
+	boot_mode: string | null;
+	secure_boot: boolean | null;
+	mainboard: string | null;
+	disks: Disk[];
+	network: NetIface[];
+	pci: PciDevice[];
+	collected_at: string | null;
+	errors: string[];
+}
+
+export interface GuestDisk {
+	key: string;
+	storage: string | null;
+	volume: string;
+	size: number | null;
+	media: string | null;
+	mountpoint: string | null;
+	options: Record<string, string>;
+}
+
+export interface GuestNic {
+	key: string;
+	model: string | null;
+	mac: string | null;
+	bridge: string | null;
+	vlan: number | null;
+	firewall: boolean;
+	rate_mbps: number | null;
+	name: string | null;
+	ip_config: string | null;
+}
+
+export interface GuestInventory {
+	cluster: string;
+	vmid: number;
+	name: string;
+	type: GuestType;
+	node: string;
+	status: string;
+	template: boolean;
+	cores: number | null;
+	sockets: number | null;
+	vcpus: number | null;
+	cpu_type: string | null;
+	cpu_limit: number | null;
+	memory: number | null;
+	balloon_min: number | null;
+	swap: number | null;
+	disks: GuestDisk[];
+	nics: GuestNic[];
+	hostpci: { key: string; devices: string[]; mapping: string | null; options: Record<string, string> }[];
+	usb: string[];
+	bios: string | null;
+	machine: string | null;
+	ostype: string | null;
+	arch: string | null;
+	unprivileged: boolean | null;
+	agent_enabled: boolean | null;
+	agent_running: boolean | null;
+	os_name: string | null;
+	ip_addresses: string[];
+	onboot: boolean;
+	protection: boolean;
+	tags: string[];
+	notes: string | null;
+	collected_at: string | null;
+	error: string | null;
+}
+
+export interface ClusterInventory {
+	cluster: string;
+	nodes: NodeHardware[];
+	guests: GuestInventory[];
+	collected_at: string | null;
+	duration_s: number | null;
 }

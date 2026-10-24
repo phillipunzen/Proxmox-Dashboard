@@ -133,7 +133,7 @@
 						<div class="flex items-center gap-2">
 							<span class="rounded bg-zinc-100 px-1.5 py-0.5 text-[10px] font-semibold text-zinc-500 dark:bg-zinc-800">{g.type === 'qemu' ? 'VM' : 'LXC'}</span>
 							<span class="tabular text-zinc-500">{g.vmid}</span>
-							<span class="font-medium">{g.name}</span>
+							<a href="/guests/{g.cluster}/{g.vmid}" class="font-medium hover:text-accent">{g.name}</a>
 							{#if g.lock}<span class="text-xs text-amber-500" title="Lock: {g.lock}">🔒</span>{/if}
 						</div>
 					</td>

@@ -12,7 +12,8 @@ set -euo pipefail
 USER_ID="dashboard@pve"
 
 # Proxmox VE 9 privilege names (VM.Monitor was replaced by VM.GuestAgent.*).
-RO_PRIVS="Sys.Audit,VM.Audit,Datastore.Audit,Pool.Audit,SDN.Audit,VM.GuestAgent.Audit"
+# Mapping.Audit: resolve PCI resource mappings (hostpciN: mapping=...) for the inventory.
+RO_PRIVS="Sys.Audit,VM.Audit,Datastore.Audit,Pool.Audit,SDN.Audit,Mapping.Audit,VM.GuestAgent.Audit"
 OP_PRIVS="${RO_PRIVS},VM.PowerMgmt,VM.Snapshot,VM.Snapshot.Rollback,VM.Backup,VM.Migrate,Datastore.AllocateSpace"
 NODE_PRIVS="${OP_PRIVS},Sys.Modify,Sys.PowerMgmt"
 

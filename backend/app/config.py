@@ -72,6 +72,12 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     # Directory containing the built SvelteKit SPA. Empty/nonexistent = API only.
     static_dir: str = "/app/static"
+    # VictoriaMetrics base URL for history. Empty = no history (live data only).
+    vm_url: str = ""
+    # Mock mode: write 30 days of synthetic history into an empty TSDB on startup.
+    mock_backfill: bool = True
+    # Seconds between hardware/config inventory refreshes (disks, NICs, PCI, guest configs).
+    inventory_interval: float = Field(default=900.0, ge=60.0, le=86400.0)
 
 
 def load_clusters(environ: Mapping[str, str] | None = None) -> list[ClusterConfig]:

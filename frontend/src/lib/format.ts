@@ -54,3 +54,31 @@ export function levelColor(value: number, warn = 0.75, crit = 0.9): string {
 	if (value >= warn) return 'bg-amber-500';
 	return 'bg-emerald-500';
 }
+
+export type Unit = 'pct' | 'bytes' | 'bps' | 'cores' | 'num';
+
+/** Format a value of the given unit (pct expects 0..1). */
+export function unitFormat(value: number | null | undefined, unit: Unit): string {
+	switch (unit) {
+		case 'pct':
+			return pct(value, 1);
+		case 'bytes':
+			return bytes(value);
+		case 'bps':
+			return rate(value);
+		case 'cores':
+			return value == null ? '–' : `${num(value, 2)} Kerne`;
+		default:
+			return num(value, 2);
+	}
+}
+
+export function dateTime(seconds: number): string {
+	return new Date(seconds * 1000).toLocaleString('de-DE', {
+		day: '2-digit',
+		month: '2-digit',
+		hour: '2-digit',
+		minute: '2-digit',
+		second: '2-digit'
+	});
+}

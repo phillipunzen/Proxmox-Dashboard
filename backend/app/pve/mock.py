@@ -19,6 +19,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.pve import mock_inventory
 from app.pve.client import PveError
 
 GiB = 1024**3
@@ -60,6 +61,7 @@ class MockStorage:
     used: int
     shared: bool = False
     content: str = "images,rootdir"
+    growth_per_day: float = 0.0
 
 
 @dataclass
@@ -128,9 +130,11 @@ def _homelab_spec(rng: random.Random) -> MockClusterSpec:
         vmid += 1
     storages = [
         MockStorage("local", "dir", 100 * GiB, 0, content="iso,vztmpl,backup"),
-        MockStorage("local-zfs", "zfspool", 900 * GiB, 0),
-        MockStorage("nfs-nas", "nfs", 8000 * GiB, 5100 * GiB, shared=True, content="backup,iso"),
-        MockStorage("pbs", "pbs", 4000 * GiB, 2650 * GiB, shared=True, content="backup"),
+        MockStorage("local-zfs", "zfspool", 900 * GiB, 0, growth_per_day=1.5 * GiB),
+        MockStorage("nfs-nas", "nfs", 8000 * GiB, 5100 * GiB, shared=True, content="backup,iso",
+                    growth_per_day=12 * GiB),
+        MockStorage("pbs", "pbs", 4000 * GiB, 2650 * GiB, shared=True, content="backup",
+                    growth_per_day=28 * GiB),
     ]
     return MockClusterSpec("homelab", True, nodes, guests, storages)
 
@@ -147,7 +151,7 @@ def _standalone_spec(rng: random.Random) -> MockClusterSpec:
     ]
     storages = [
         MockStorage("local", "dir", 50 * GiB, 0, content="iso,vztmpl,backup"),
-        MockStorage("local-lvm", "lvmthin", 400 * GiB, 0),
+        MockStorage("local-lvm", "lvmthin", 400 * GiB, 0, growth_per_day=0.8 * GiB),
     ]
     return MockClusterSpec("standalone", False, nodes, guests, storages)
 
@@ -172,34 +176,43 @@ class MockPveClient:
         self._fill_storage()
 
     # -- value generators ----------------------------------------------------------------------
+    # All generators accept an optional timestamp so the history backfill can reuse them.
 
-    def _noise(self, *key: Any) -> float:
-        """Deterministic pseudo-noise in [0, 1) for a key and the current 10 s bucket."""
-        bucket = int(self.clock() // 10)
-        return random.Random(zlib.crc32(repr((self.seed, bucket, *key)).encode())).random()
+    def _now(self, t: float | None) -> float:
+        return self.clock() if t is None else t
 
-    def guest_cpu(self, g: MockGuest) -> float:
+    def _noise(self, *key: Any, t: float | None = None) -> float:
+        """Deterministic pseudo-noise in [0, 1) for a key and a 10 s time bucket."""
+        bucket = int(self._now(t) // 10)
+        return zlib.crc32(f"{self.seed}|{bucket}|{key}".encode()) / 4294967296
+
+    def guest_cpu(self, g: MockGuest, t: float | None = None) -> float:
         if g.status != "running":
             return 0.0
-        t = self.clock()
+        t = self._now(t)
         daily = 0.5 + 0.5 * math.sin(2 * math.pi * t / 86400 + g.phase)
-        value = g.base_load * (0.4 + 0.9 * daily) + 0.08 * g.base_load * self._noise(g.vmid)
+        value = g.base_load * (0.4 + 0.9 * daily) + 0.08 * g.base_load * self._noise(g.vmid, t=t)
         # Rare spike: one 10 s bucket out of ~40 per guest lights up.
-        if self._noise(g.vmid, "spike") > 0.975:
+        if self._noise(g.vmid, "spike", t=t) > 0.975:
             value += 0.4
         return max(0.0, min(1.0, value))
 
-    def guest_mem(self, g: MockGuest) -> int:
+    def guest_mem(self, g: MockGuest, t: float | None = None) -> int:
         if g.status != "running":
             return 0
-        frac = 0.35 + 0.4 * ((g.vmid * 37) % 100) / 100 + 0.05 * self._noise(g.vmid, "mem")
+        frac = 0.35 + 0.4 * ((g.vmid * 37) % 100) / 100 + 0.05 * self._noise(g.vmid, "mem", t=t)
         return int(g.maxmem * min(frac, 0.97))
 
+    def guest_rate(self, g: MockGuest, rate: float, salt: str, t: float | None = None) -> float:
+        """Instantaneous bytes/s: the mean rate +-30 % over a 1 h wave."""
+        if g.status != "running":
+            return 0.0
+        return rate * (1 + 0.3 * math.sin(self._now(t) / 600 + g.phase + len(salt)))
+
     def _counter(self, g: MockGuest, rate: float, salt: str) -> int:
-        """Cumulative counter since boot, with mild time variation."""
+        """Cumulative counter since boot = integral of :meth:`guest_rate`."""
         if g.status != "running":
             return 0
-        # Integral of rate * (1 + 0.3 * sin(t/600 + p)) -> the rate itself varies by +-30 %.
         t = self.clock()
         p = g.phase + len(salt)
         elapsed = t - self.started
@@ -207,6 +220,7 @@ class MockPveClient:
         return int(rate * (elapsed - 0.3 * 600 * drift))
 
     def _fill_storage(self) -> None:
+        self._storage_ref = self.clock()
         for s in self.spec.storages:
             if s.used:
                 continue
@@ -216,20 +230,28 @@ class MockPveClient:
             else:
                 s.used = int(s.total * 0.41)
 
+    def storage_used(self, s: MockStorage, t: float | None = None) -> int:
+        """Storage grows linearly (so trends/forecasts have something to show)."""
+        days = (self._now(t) - self._storage_ref) / 86400
+        return max(0, min(s.total, int(s.used + s.growth_per_day * days)))
+
     def _node_guests(self, node: str) -> list[MockGuest]:
         return [g for g in self.spec.guests if g.node == node]
 
-    def node_cpu(self, n: MockNode) -> float:
+    def node_cpu(self, n: MockNode, t: float | None = None) -> float:
         if not n.online:
             return 0.0
-        used = sum(self.guest_cpu(g) * g.cpus for g in self._node_guests(n.name))
+        used = sum(self.guest_cpu(g, t) * g.cpus for g in self._node_guests(n.name))
         return min(1.0, 0.02 + used / n.cpus)
 
-    def node_mem(self, n: MockNode) -> int:
+    def node_mem(self, n: MockNode, t: float | None = None) -> int:
         if not n.online:
             return 0
-        used = sum(self.guest_mem(g) for g in self._node_guests(n.name))
+        used = sum(self.guest_mem(g, t) for g in self._node_guests(n.name))
         return min(int(n.mem * 0.98), int(used + 3.5 * GiB))  # + host / ZFS ARC overhead
+
+    def node_iowait(self, n: MockNode, t: float | None = None) -> float:
+        return 0.002 + 0.03 * self._noise(n.name, "iowait", t=t)
 
     # -- API -------------------------------------------------------------------------------------
 
@@ -244,7 +266,10 @@ class MockPveClient:
         m = re.fullmatch(r"/nodes/([^/]+)/status", path)
         if m:
             return self._node_status(m.group(1))
-        raise PveError(501, "Not implemented in mock", path)
+        try:
+            return mock_inventory.handle(self, path, params or {})
+        except LookupError:
+            raise PveError(501, "Not implemented in mock", path) from None
 
     async def aclose(self) -> None:
         return None
@@ -290,7 +315,8 @@ class MockPveClient:
                         "id": f"storage/{n.name}/{s.storage}", "type": "storage",
                         "storage": s.storage, "node": n.name, "plugintype": s.type,
                         "status": "available" if n.online else "unknown",
-                        "disk": s.used, "maxdisk": s.total, "shared": int(s.shared),
+                        "disk": self.storage_used(s), "maxdisk": s.total,
+                        "shared": int(s.shared),
                         "content": s.content,
                     })
         return out
@@ -322,7 +348,7 @@ class MockPveClient:
         load = cpu * n.cpus
         return {
             "cpu": cpu,
-            "wait": 0.002 + 0.03 * self._noise(node, "iowait"),
+            "wait": self.node_iowait(n),
             "loadavg": [f"{load:.2f}", f"{load * 0.9:.2f}", f"{load * 0.8:.2f}"],
             "uptime": int(self.clock() - self.started),
             "kversion": "Linux 6.14.11-4-pve #1 SMP PREEMPT_DYNAMIC PMX 6.14.11-4",

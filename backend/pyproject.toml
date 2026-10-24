@@ -38,3 +38,8 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# Fixture-style data tables read better unwrapped.
+"app/pve/mock_inventory.py" = ["E501"]
+"tests/*" = ["E501"]
