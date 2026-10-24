@@ -1,0 +1,12 @@
+.git
+.env
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.ruff_cache
+**/*.egg-info
+frontend/node_modules
+frontend/.svelte-kit
+frontend/build
+backend/tests
+certs

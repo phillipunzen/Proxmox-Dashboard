@@ -1,0 +1,25 @@
+services:
+  dashboard:
+    build: .
+    image: proxmox-dashboard:latest
+    container_name: proxmox-dashboard
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "${DASHBOARD_PORT:-8080}:8000"
+    volumes:
+      # Optional: CA certificate of your Proxmox cluster (PVE_n_CA_FILE=/certs/pve-root-ca.pem)
+      - ./certs:/certs:ro
+    # Hardening: nothing in the container needs to write outside /tmp or gain privileges.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
