@@ -7,6 +7,7 @@
 	import Chart from '#lib/components/Chart.svelte';
 	import HistoryCharts from '#lib/components/HistoryCharts.svelte';
 	import Kpi from '#lib/components/Kpi.svelte';
+	import NodeManagement from '#lib/components/NodeManagement.svelte';
 	import RangePicker from '#lib/components/RangePicker.svelte';
 	import StatusBadge from '#lib/components/StatusBadge.svelte';
 	import type { NodeHardware, RangeKey } from '#lib/types.js';
@@ -56,6 +57,8 @@
 		<Kpi label="IO-Delay" value={pct(node.iowait, 1)} ratio={node.iowait} warn={0.05} crit={0.1} />
 		<Kpi label="Load" value={num(node.loadavg?.[0], 2)} sub={node.loadavg ? `5m ${num(node.loadavg[1])} · 15m ${num(node.loadavg[2])}` : ''} />
 	</div>
+
+	<div class="mt-4"><NodeManagement cluster={node.cluster} node={node.node} /></div>
 
 	<div class="mt-4 grid gap-4 lg:grid-cols-3">
 		<div class="card lg:col-span-2">

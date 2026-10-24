@@ -10,8 +10,7 @@ from pydantic import BaseModel, Field
 
 from app import audit
 from app.actions.service import ActionError, ActionResult, ActionService, PowerAction
-from app.auth.deps import actor, admin, operator, viewer
-from app.auth.service import SessionInfo
+from app.auth.deps import Principal, actor, admin, operator, viewer
 from app.pve import PveApi, PveError, PveUnavailable
 
 router = APIRouter(prefix="/api/v1", tags=["actions"])
@@ -49,7 +48,7 @@ class Capability(BaseModel):
 
 
 @router.get("/actions/capabilities", response_model=list[Capability])
-async def capabilities(request: Request, _: SessionInfo = viewer) -> list[Capability]:
+async def capabilities(request: Request, _: Principal = viewer) -> list[Capability]:
     svc = _svc(request)
     out = []
     for name in svc.clusters:
@@ -102,27 +101,27 @@ G = "/clusters/{cluster}/guests/{vmid}"
 
 @router.post(G + "/power", response_model=ActionResult)
 async def power(request: Request, cluster: str, vmid: int, body: PowerRequest,
-                info: SessionInfo = operator) -> ActionResult:
+                info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).power(actor(request, info), cluster, vmid, body.action,
                                           body.confirm, body.timeout))
 
 
 @router.get(G + "/snapshots")
 async def snapshots(request: Request, cluster: str, vmid: int,
-                    _: SessionInfo = viewer) -> list[dict[str, Any]]:
+                    _: Principal = viewer) -> list[dict[str, Any]]:
     return await _run(_svc(request).list_snapshots(cluster, vmid, _read_client(request, cluster)))
 
 
 @router.post(G + "/snapshots", response_model=ActionResult)
 async def snapshot_create(request: Request, cluster: str, vmid: int, body: SnapshotCreate,
-                          info: SessionInfo = operator) -> ActionResult:
+                          info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).snapshot_create(actor(request, info), cluster, vmid,
                                                     body.name, body.description, body.vmstate))
 
 
 @router.post(G + "/snapshots/{name}/rollback", response_model=ActionResult)
 async def snapshot_rollback(request: Request, cluster: str, vmid: int, name: str, body: Confirm,
-                            info: SessionInfo = operator) -> ActionResult:
+                            info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).snapshot_rollback(actor(request, info), cluster, vmid, name,
                                                       body.confirm))
 
@@ -130,14 +129,14 @@ async def snapshot_rollback(request: Request, cluster: str, vmid: int, name: str
 @router.delete(G + "/snapshots/{name}", response_model=ActionResult)
 async def snapshot_delete(request: Request, cluster: str, vmid: int, name: str,
                           confirm: Annotated[str, Query(description="Guest name")],
-                          info: SessionInfo = operator) -> ActionResult:
+                          info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).snapshot_delete(actor(request, info), cluster, vmid, name,
                                                     confirm))
 
 
 @router.get(G + "/backup-storages")
 async def backup_storages(request: Request, cluster: str, vmid: int,
-                          _: SessionInfo = viewer) -> list[str]:
+                          _: Principal = viewer) -> list[str]:
     svc = _svc(request)
     try:
         t = svc.target(cluster, vmid)
@@ -148,28 +147,28 @@ async def backup_storages(request: Request, cluster: str, vmid: int,
 
 @router.post(G + "/backup", response_model=ActionResult)
 async def backup(request: Request, cluster: str, vmid: int, body: BackupRequest,
-                 info: SessionInfo = operator) -> ActionResult:
+                 info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).backup(actor(request, info), cluster, vmid, body.storage,
                                            body.mode, body.notes))
 
 
 @router.get(G + "/migrate")
 async def migrate_precheck(request: Request, cluster: str, vmid: int,
-                           _: SessionInfo = viewer) -> dict[str, Any]:
+                           _: Principal = viewer) -> dict[str, Any]:
     return await _run(_svc(request).migrate_precheck(cluster, vmid,
                                                      _read_client(request, cluster)))
 
 
 @router.post(G + "/migrate", response_model=ActionResult)
 async def migrate(request: Request, cluster: str, vmid: int, body: MigrateRequest,
-                  info: SessionInfo = operator) -> ActionResult:
+                  info: Principal = operator) -> ActionResult:
     return await _run(_svc(request).migrate(actor(request, info), cluster, vmid, body.target,
                                             body.confirm))
 
 
 @router.post("/actions/bulk", summary="Power action for several guests (by VMIDs or tag)")
 async def bulk(request: Request, body: BulkRequest,
-               info: SessionInfo = operator) -> list[dict[str, Any]]:
+               info: Principal = operator) -> list[dict[str, Any]]:
     return await _run(_svc(request).bulk_power(actor(request, info), body.cluster, body.action,
                                                body.vmids, body.tag, body.confirm))
 
@@ -193,7 +192,7 @@ class TaskView(BaseModel):
 async def tasks(request: Request, cluster: str | None = None, vmid: int | None = None,
                 errors_only: bool = False,
                 limit: Annotated[int, Query(ge=1, le=500)] = 100,
-                _: SessionInfo = viewer) -> list[TaskView]:
+                _: Principal = viewer) -> list[TaskView]:
     out: list[TaskView] = []
     for name, client in request.app.state.clients.items():
         if cluster and name != cluster:
@@ -224,7 +223,7 @@ def _task_path(upid: str) -> str:
 
 @router.get("/tasks/{cluster}/{upid}/status", tags=["tasks"])
 async def task_status(request: Request, cluster: str, upid: str,
-                      _: SessionInfo = viewer) -> dict[str, Any]:
+                      _: Principal = viewer) -> dict[str, Any]:
     try:
         return await _read_client(request, cluster).get(_task_path(upid) + "/status")
     except (PveError, PveUnavailable) as exc:
@@ -235,7 +234,7 @@ async def task_status(request: Request, cluster: str, upid: str,
 async def task_log(request: Request, cluster: str, upid: str,
                    start: Annotated[int, Query(ge=0)] = 0,
                    limit: Annotated[int, Query(ge=1, le=5000)] = 1000,
-                   _: SessionInfo = viewer) -> list[dict[str, Any]]:
+                   _: Principal = viewer) -> list[dict[str, Any]]:
     try:
         return await _read_client(request, cluster).get(_task_path(upid) + "/log",
                                                         {"start": start, "limit": limit})
@@ -248,20 +247,20 @@ async def task_log(request: Request, cluster: str, upid: str,
 
 @router.get("/audit", response_model=list[audit.AuditView], tags=["audit"],
             summary="Audit log (admins: everything, others: own entries)")
-async def audit_log(request: Request, info: SessionInfo = viewer, actor_name: str | None = None,
+async def audit_log(request: Request, info: Principal = viewer, actor_name: str | None = None,
                     action: str | None = None, status: str | None = None,
                     cluster: str | None = None, vmid: int | None = None,
                     before_id: int | None = None,
                     limit: Annotated[int, Query(ge=1, le=500)] = 100) -> list[audit.AuditView]:
-    if info.user.role != "admin":
-        actor_name = info.user.username
+    if info.role != "admin":
+        actor_name = info.name
     return await audit.query(request.app.state.db, actor=actor_name, action=action, status=status,
                              cluster=cluster, vmid=vmid, before_id=before_id, limit=limit)
 
 
 @router.get("/audit/{entry_id}", response_model=audit.AuditView, tags=["audit"])
 async def audit_entry(request: Request, entry_id: int,
-                      info: SessionInfo = admin) -> audit.AuditView:
+                      info: Principal = admin) -> audit.AuditView:
     rows = await audit.query(request.app.state.db, before_id=entry_id + 1, limit=1)
     if not rows or rows[0].id != entry_id:
         raise HTTPException(404, "Eintrag nicht gefunden")

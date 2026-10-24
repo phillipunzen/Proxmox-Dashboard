@@ -346,3 +346,104 @@ export interface ClusterInventory {
 	collected_at: string | null;
 	duration_s: number | null;
 }
+
+// --- Phase 4: node management, jobs, alerts ------------------------------------------------
+
+export interface NodeStatus {
+	cluster: string;
+	node: string;
+	online: boolean;
+	maintenance: boolean;
+	maintenance_since: string | null;
+	maintenance_by: string | null;
+	evacuated: { vmid: number; name: string; type: string; target: string | null }[];
+	updates: number | null;
+	updates_checked_at: string | null;
+	updates_error: string | null;
+	reboot_required: boolean | null;
+	temperature: number | null;
+	ssh_host: string | null;
+	ssh_trusted: boolean;
+	running_job: number | null;
+	can_manage: boolean;
+	manage_reason: string | null;
+}
+
+export interface Package {
+	package: string;
+	old_version: string | null;
+	new_version: string;
+	title: string | null;
+	origin: string | null;
+	section: string | null;
+	priority: string | null;
+}
+
+export interface UpdateInfo {
+	cluster: string;
+	node: string;
+	packages: Package[];
+	checked_at: string | null;
+	error: string | null;
+	reboot_required: boolean | null;
+}
+
+export interface Job {
+	id: number;
+	kind: string;
+	cluster: string;
+	node: string | null;
+	status: 'running' | 'ok' | 'error' | 'cancelled';
+	started_by: string;
+	started_at: string;
+	finished_at: string | null;
+	summary: string | null;
+	params: Record<string, unknown>;
+}
+
+export interface AlertEvent {
+	id: number;
+	rule_id: number | null;
+	rule_name: string;
+	target: string;
+	severity: Severity;
+	state: 'firing' | 'resolved';
+	value: number | null;
+	message: string;
+	started_at: string;
+	resolved_at: string | null;
+	acknowledged_by: string | null;
+}
+
+export interface AlertRule {
+	id?: number;
+	name: string;
+	enabled: boolean;
+	metric: string;
+	operator: '>' | '>=' | '<' | '<=';
+	threshold: number;
+	for_seconds: number;
+	severity: Severity;
+	selector: Record<string, string | number>;
+	channel_ids: number[];
+	repeat_minutes: number;
+}
+
+export interface MetricInfo {
+	key: string;
+	label: string;
+	unit: 'ratio' | 'celsius' | 'count' | 'bool' | 'percent';
+	kind: string;
+	default_operator: string;
+	default_threshold: number;
+}
+
+export interface Channel {
+	id?: number;
+	name: string;
+	type: 'webhook' | 'ntfy' | 'gotify' | 'email' | 'homeassistant';
+	config: Record<string, string | number | string[]>;
+	enabled: boolean;
+	min_severity: Severity;
+	send_resolved: boolean;
+}

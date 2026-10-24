@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 from app import audit
-from app.auth.deps import COOKIE, actor, admin, auth_service, client_ip, session
+from app.auth.deps import COOKIE, actor, admin_session, auth_service, client_ip, session
 from app.auth.service import AuthError, Pending, Role, SessionInfo, _aware
 from app.core.crypto import token_hash
 from app.core.ratelimit import RateLimiter
@@ -274,13 +274,13 @@ def _user_view(u: User) -> UserView:
 
 
 @users_router.get("", response_model=list[UserView])
-async def list_users(request: Request, _: SessionInfo = admin) -> list[UserView]:
+async def list_users(request: Request, _: SessionInfo = admin_session) -> list[UserView]:
     return [_user_view(u) for u in await auth_service(request).list_users()]
 
 
 @users_router.post("", response_model=TempPassword, status_code=201)
 async def create_user(request: Request, body: UserCreate,
-                      info: SessionInfo = admin) -> TempPassword:
+                      info: SessionInfo = admin_session) -> TempPassword:
     try:
         user, temp = await auth_service(request).create_user(body.username, body.role,
                                                              body.password or None)
@@ -293,7 +293,7 @@ async def create_user(request: Request, body: UserCreate,
 
 @users_router.patch("/{user_id}", response_model=UserView)
 async def update_user(request: Request, user_id: int, body: UserUpdate,
-                      info: SessionInfo = admin) -> UserView:
+                      info: SessionInfo = admin_session) -> UserView:
     if user_id == info.user.id and body.disabled:
         raise HTTPException(422, "Du kannst dich nicht selbst deaktivieren")
     try:
@@ -308,7 +308,8 @@ async def update_user(request: Request, user_id: int, body: UserUpdate,
 
 
 @users_router.post("/{user_id}/reset-password", response_model=TempPassword)
-async def reset_password(request: Request, user_id: int, info: SessionInfo = admin) -> TempPassword:
+async def reset_password(request: Request, user_id: int,
+                         info: SessionInfo = admin_session) -> TempPassword:
     svc = auth_service(request)
     temp = secrets.token_urlsafe(15)
     try:
@@ -324,7 +325,7 @@ async def reset_password(request: Request, user_id: int, info: SessionInfo = adm
 
 
 @users_router.post("/{user_id}/reset-totp", response_model=UserView)
-async def reset_totp(request: Request, user_id: int, info: SessionInfo = admin) -> UserView:
+async def reset_totp(request: Request, user_id: int, info: SessionInfo = admin_session) -> UserView:
     svc = auth_service(request)
     user = await svc.get_user(user_id)
     if user is None:
@@ -338,7 +339,7 @@ async def reset_totp(request: Request, user_id: int, info: SessionInfo = admin) 
 
 
 @users_router.delete("/{user_id}", status_code=204)
-async def delete_user(request: Request, user_id: int, info: SessionInfo = admin) -> None:
+async def delete_user(request: Request, user_id: int, info: SessionInfo = admin_session) -> None:
     if user_id == info.user.id:
         raise HTTPException(422, "Du kannst dich nicht selbst löschen")
     svc = auth_service(request)
@@ -351,3 +352,64 @@ async def delete_user(request: Request, user_id: int, info: SessionInfo = admin)
         raise HTTPException(422, str(exc)) from exc
     await audit.record(request.app.state.db, actor(request, info), "user.delete", "ok",
                        target=user.username if user else str(user_id))
+
+
+# --- API keys (admin session only) --------------------------------------------------------------
+
+keys_router = APIRouter(prefix="/api/v1/admin/api-keys", tags=["admin"])
+
+
+class ApiKeyView(BaseModel):
+    id: int
+    name: str
+    prefix: str
+    scopes: list[str]
+    created_by: str
+    created_at: datetime
+    expires_at: datetime | None
+    last_used_at: datetime | None
+    last_used_ip: str | None
+    revoked: bool
+
+
+class ApiKeyCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0-9 ._-]+$")
+    scopes: list[Literal["read", "control", "admin"]] = Field(min_length=1)
+    expires_days: int | None = Field(None, ge=1, le=3650)
+
+
+class ApiKeyCreated(BaseModel):
+    key: ApiKeyView
+    secret: str = Field(description="Shown once - store it now")
+
+
+@keys_router.get("", response_model=list[ApiKeyView])
+async def list_keys(request: Request, _: SessionInfo = admin_session) -> list[ApiKeyView]:
+    return [ApiKeyView.model_validate(k, from_attributes=True)
+            for k in await request.app.state.api_keys.list()]
+
+
+@keys_router.post("", response_model=ApiKeyCreated, status_code=201)
+async def create_key(request: Request, body: ApiKeyCreate,
+                     info: SessionInfo = admin_session) -> ApiKeyCreated:
+    try:
+        row, secret = await request.app.state.api_keys.create(
+            body.name, body.scopes, info.user.username, body.expires_days)
+    except ValueError as exc:
+        raise HTTPException(422, str(exc)) from exc
+    await audit.record(request.app.state.db, actor(request, info), "apikey.create", "ok",
+                       target=body.name, params={"scopes": row.scopes,
+                                                 "expires_days": body.expires_days})
+    return ApiKeyCreated(key=ApiKeyView.model_validate(row, from_attributes=True), secret=secret)
+
+
+@keys_router.delete("/{key_id}", response_model=ApiKeyView)
+async def revoke_key(request: Request, key_id: int,
+                     info: SessionInfo = admin_session) -> ApiKeyView:
+    try:
+        row = await request.app.state.api_keys.revoke(key_id)
+    except LookupError as exc:
+        raise HTTPException(404, "API-Key nicht gefunden") from exc
+    await audit.record(request.app.state.db, actor(request, info), "apikey.revoke", "ok",
+                       target=row.name)
+    return ApiKeyView.model_validate(row, from_attributes=True)

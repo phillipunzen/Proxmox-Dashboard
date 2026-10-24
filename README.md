@@ -2,14 +2,14 @@
 
 Selbst gehostetes Dashboard für Proxmox-VE-Cluster mit eigener Monitoring-API.
 
-**Stand: Phase 3**: Live-Übersicht, Historie bis 400 Tage (VictoriaMetrics), Lastanalyse mit Drill-down, Hardware-Inventar mit Export, **Login mit Argon2 + TOTP, Rollen, Gast-Steuerung mit Bestätigungen, Proxmox-Aufgaben, Audit-Log**, Mock-Modus, REST-API `/api/v1` mit OpenAPI-Doku.
+**Stand: Phase 4**: Live-Übersicht, Historie bis 400 Tage (VictoriaMetrics), Lastanalyse mit Drill-down, Hardware-Inventar mit Export, Login mit Argon2 + TOTP, Rollen, Gast-Steuerung, Audit-Log, **Node-Updates per SSH mit Live-Ausgabe, Wartungsmodus, Node-Neustart mit Vorab-Prüfung, Alerting (ntfy, Gotify, E-Mail, Webhook, Home Assistant), API-Keys mit Scopes, Prometheus-Endpunkt**, Mock-Modus, REST-API `/api/v1` mit OpenAPI-Doku.
 
 | Phase | Inhalt | Status |
 |---|---|---|
 | 1 | API-Anbindung, Übersicht, Nodes, Gäste, live, read-only | ✅ |
 | 2 | Historie (VictoriaMetrics), Lastanalyse + Drill-down, Hardware-Inventar | ✅ |
 | 3 | Steuerung, Bestätigungen, Audit-Log, Login/Rollen | ✅ |
-| 4 | Updates, Alerting, API-Keys, Prometheus `/metrics` | – |
+| 4 | Updates, Alerting, API-Keys, Prometheus `/metrics` | ✅ |
 | 5 | MCP-Server, Feinschliff | – |
 
 ## Architektur
@@ -74,7 +74,8 @@ Der Mock simuliert den Cluster `homelab` (3 Nodes, 13 VMs, 20 LXC) und einen Sta
 Das Skript auf **einem** Node als root ausführen. Die Konfiguration gilt clusterweit.
 
 ```bash
-bash deploy/pve-setup-roles.sh
+bash deploy/pve-setup-roles.sh   Proxmox-Rollen und -Tokens
+deploy/node-setup.sh        SSH-Zugang auf den Nodes (eingeschränkt)
 ```
 
 Für reines Monitoring reicht der Read-only-Token. Für die Steuerung (Start/Stopp, Snapshots, Backup, Migration) brauchst du zusätzlich den Operator-Token:
@@ -89,7 +90,7 @@ Das Skript legt an:
 |---|---|---|
 | `Dashboard-ReadOnly` | `Sys.Audit, VM.Audit, Datastore.Audit, Pool.Audit, SDN.Audit, Mapping.Audit, VM.GuestAgent.Audit` | Monitoring und Inventar (Token `dashboard@pve!readonly`) |
 | `Dashboard-Operator` (`--operator`) | + `VM.PowerMgmt, VM.Snapshot, VM.Snapshot.Rollback, VM.Backup, VM.Migrate, Datastore.AllocateSpace` | Gast-Steuerung (Token `dashboard@pve!operator`) |
-| `Dashboard-NodeAdmin` (`--node-admin`) | + `Sys.Modify, Sys.PowerMgmt` | apt-Update, Migrate-all, Node-Reboot (ab Phase 4) |
+| `Dashboard-NodeAdmin` (`--node-admin`) | + `Sys.Modify, Sys.PowerMgmt` | Update-Liste, Paketlisten aktualisieren, Changelog, Node-Neustart (Token `dashboard@pve!nodeadmin`) |
 
 Wofür welches Recht gebraucht wird:
 
@@ -170,7 +171,90 @@ Jede Aktion landet im **Audit-Log**: wer, wann, von welcher IP, mit welchen Para
 - `DRY_RUN=true`: Aktionen werden geprüft und protokolliert, aber nicht an Proxmox geschickt. Gut zum Ausprobieren.
 - Ohne Operator-Token bleibt der jeweilige Cluster lesend, auch wenn `READ_ONLY=false` gesetzt ist.
 
-Node-Aktionen kommen in Phase 4: Updates, Wartungsmodus mit Migrate-All, Reboot mit Vorab-Check.
+## Node-Verwaltung (Admin)
+
+Auf der Node-Detailseite unter **Verwaltung**:
+
+| Funktion | Wie | Voraussetzung |
+|---|---|---|
+| Verfügbare Updates mit Changelog | `GET /nodes/{n}/apt/update` alle 6 h | NodeAdmin-Token: Proxmox verlangt `Sys.Modify` schon zum *Auflisten* |
+| Paketlisten aktualisieren | `apt-get update` über die API (Task) | NodeAdmin-Token |
+| **Upgrade installieren** | `apt-get dist-upgrade` per SSH, Ausgabe live im Browser | SSH eingerichtet, Node-Namen eintippen |
+| Neustart erforderlich? | Prüft `/var/run/reboot-required` und vergleicht laufenden mit neuestem Kernel | SSH |
+| **Wartungsmodus** | Laufende Gäste werden nacheinander auf den Node mit dem meisten freien RAM migriert (VMs live, Container per Neustart). Nicht migrierbare Gäste (z. B. mit PCI-Passthrough) werden auf Wunsch sauber heruntergefahren. Beim Beenden werden sie zurückgeholt bzw. wieder gestartet. | Operator- und NodeAdmin-Token |
+| **Neustart** | Vorab-Prüfung: Node online? Bleibt das Quorum erhalten? Laufen noch Gäste? Wartungsmodus aktiv? Danach Reboot. Das Dashboard verfolgt, wie der Node offline und wieder online geht. | NodeAdmin-Token, Node-Namen eintippen |
+| Mainboard, Temperaturen | DMI aus `/sys/class/dmi/id`, `sensors -j` (lm-sensors) | SSH |
+
+Diese Aktionen laufen als **Jobs** mit eigenem Log. Das Log lässt sich jederzeit wieder öffnen, auch nach einem Neustart des Dashboards, und wird zusätzlich als Datei in `/data/jobs/` gespeichert. Pro Node läuft immer nur ein Job gleichzeitig.
+
+HA ist bei dir nicht aktiv. Der Wartungsmodus ist deshalb ein Dashboard-Status samt Evakuierung und nicht der HA-Maintenance-Modus von Proxmox.
+
+### SSH einrichten
+
+1. Den Public Key kopierst du unter **Admin → SSH**. Das Dashboard erzeugt das Schlüsselpaar beim ersten Start in `/data/ssh/`.
+2. Auf **jedem Node** als root ausführen:
+   ```bash
+   bash deploy/node-setup.sh "ssh-ed25519 AAAA… pve-dashboard"
+   ```
+   Das Skript legt den Benutzer `pve-dashboard` an, nur mit Key-Login und ohne Passwort. Der Key ist auf ein festes Dispatcher-Skript beschränkt (`restrict,command=…`), das nur `upgrade`, `update`, `dmi`, `sensors`, `reboot-required` und `version` annimmt. Dazu kommt **eine** sudo-Regel für ein root-eigenes Hilfsskript. Eine Shell, Forwarding oder beliebige Befehle sind nicht möglich.
+3. Unter **Admin → SSH** den Host-Key jedes Nodes abrufen und mit dem Fingerprint vergleichen, den das Skript ausgibt. Erst dann vertrauen. Das Dashboard verbindet sich nur zu bestätigten Host-Keys.
+
+> Ehrlicher Hinweis: `upgrade` führt apt als root aus, und Paket-Skripte laufen als root. Wer den privaten Schlüssel des Dashboards besitzt, kann damit Updates aus deinen konfigurierten Repositories installieren, aber keine beliebigen Befehle ausführen. Sichere das Volume `app-data` entsprechend.
+
+## Alerting
+
+Unter **Alarme** stehen aktive Alarme, der Verlauf, die Regeln und die Benachrichtigungskanäle.
+
+Beim ersten Start legt das Dashboard sinnvolle Regeln an:
+
+- Cluster nicht erreichbar, kein Quorum, Node offline
+- RAM > 90 % für 5 min, IO-Delay > 15 % für 5 min, Temperatur > 80 °C für 2 min
+- Storage > 85 % / > 95 %
+- SMART-Fehler, SSD-Verschleiß > 80 %
+- Backup fehlgeschlagen (letzte 26 h, auch für Sammel-Jobs ohne VMID)
+- Gast mit Autostart läuft nicht, Neustart erforderlich
+
+**Regeln:** Metrik, Vergleich und Schwellwert, Mindestdauer („for“), Schwere, optionale Einschränkung auf Cluster, Node, Tag, VMID oder Storage, dazu Kanäle und eine optionale Wiederholung. Ist der Zustand wieder normal, wird der Alarm automatisch aufgelöst. Auf Wunsch geht dann eine Entwarnung raus. „Bestätigen“ stoppt die Wiederholungen.
+
+**Kanäle:**
+
+| Typ | Konfiguration |
+|---|---|
+| ntfy | Server, Topic, optional Access-Token. Versand per JSON, damit Umlaute erhalten bleiben. Die Priorität richtet sich nach der Schwere. |
+| Gotify | Server, App-Token |
+| E-Mail | SMTP-Server, Port, `starttls`/`ssl`/`none`, optional Login, Absender, Empfänger |
+| Webhook | URL, optional HMAC-Secret. Die Signatur steht im Header `X-Signature-256: sha256=…`. JSON-Payload mit `event`, `title`, `rule`, `severity`, `target`, `message`, `value` |
+| Home Assistant | HA-URL und Webhook-ID. In HA eine Automation mit Webhook-Trigger anlegen. |
+
+Zugangsdaten werden verschlüsselt gespeichert und in der API nur maskiert angezeigt. Mit **Test senden** prüfst du einen Kanal. Trage `DASHBOARD_URL` ein, damit Benachrichtigungen einen Link enthalten.
+
+## API-Keys und Prometheus
+
+Unter **Admin → API-Keys** legst du Keys für Tools an. Der Key wird nur einmal angezeigt, gespeichert wird nur sein Hash.
+
+| Scope | entspricht Rolle | Typisch für |
+|---|---|---|
+| `read` | Viewer | Home Assistant, Prometheus, Grafana, Skripte |
+| `control` | Operator | MCP-Server / KI-Assistent mit Steuerung |
+| `admin` | Admin | Node-Aktionen, Alarm-Regeln (keine Benutzer- und Key-Verwaltung) |
+
+```bash
+curl -H "Authorization: Bearer pvd_…" http://dashboard.lan:8080/api/v1/guests?sort=cpu_host\&order=desc\&limit=5
+```
+
+Keys brauchen kein CSRF-Token. Im Audit-Log erscheinen sie als `apikey:<name>`.
+
+**Prometheus** unter `/metrics` mit einem `read`-Key:
+
+```yaml
+scrape_configs:
+  - job_name: proxmox-dashboard
+    metrics_path: /metrics
+    authorization: { credentials: pvd_… }
+    static_configs: [{ targets: ['dashboard.lan:8080'] }]
+```
+
+Exportiert werden `pve_cluster_up`, `pve_cluster_quorate`, `pve_node_*` (CPU, RAM, Swap, IO-Delay, Load, Uptime, Info, Wartung, offene Updates), `pve_guest_*` (Status, Info inkl. Tags und Pool, CPU, Host-Anteil, RAM, Disk- und Netzraten, Uptime), `pve_storage_*` und `pve_alerts_firing{severity}`.
 
 ## API (Auszug)
 
@@ -214,21 +298,27 @@ Die vollständige, interaktive Doku liegt unter `/api/docs`.
 | GET | `/api/v1/tasks/{cluster}/{upid}/status\|log` | Task-Status und -Log |
 | GET | `/api/v1/audit?action=&status=&actor_name=&vmid=&before_id=` | Audit-Log |
 
-**Skripte und Tools:** Bis API-Keys kommen (Phase 4), meldest du dich wie der Browser an. Speichere das Cookie und schicke bei schreibenden Aufrufen den `X-CSRF-Token` mit:
-
-```bash
-curl -c jar -H 'Content-Type: application/json' -d '{"username":"viewer1","password":"…"}' http://localhost:8080/api/v1/auth/login
-curl -b jar http://localhost:8080/api/v1/guests?sort=cpu_host\&order=desc\&limit=5
-```
+| GET | `/api/v1/node-status` | Wartung, offene Updates, Neustart nötig, Temperatur, SSH-Status je Node |
+| GET | `/api/v1/clusters/{c}/nodes/{n}/updates[/changelog?package=]` | Update-Liste, Changelog |
+| POST | `/api/v1/clusters/{c}/nodes/{n}/updates/refresh` | `apt-get update` (Job) |
+| POST | `/api/v1/clusters/{c}/nodes/{n}/upgrade` | `{confirm: <node>}`, dist-upgrade per SSH (Job) |
+| GET/POST | `/api/v1/clusters/{c}/nodes/{n}/maintenance[/plan]` | `{enable, confirm, shutdown_unmigratable, return_guests}` (Job) |
+| GET/POST | `/api/v1/clusters/{c}/nodes/{n}/reboot[/precheck]` | `{confirm, force}` (Job) |
+| GET | `/api/v1/jobs`, `/api/v1/jobs/{id}`, `/api/v1/jobs/{id}/log`, `/api/v1/jobs/{id}/stream` (SSE) | Jobs und Live-Log |
+| GET/POST | `/api/v1/admin/ssh`, `…/scan`, `…/trust`, `…/test` | SSH-Einrichtung |
+| GET | `/api/v1/alerts?state=firing\|resolved\|all`, POST `/api/v1/alerts/{id}/ack` | Alarme |
+| GET/POST/PUT/DELETE | `/api/v1/alerts/rules[/{id}]`, `/api/v1/alerts/channels[/{id}]`, POST `…/channels/{id}/test` | Regeln und Kanäle |
+| GET/POST/DELETE | `/api/v1/admin/api-keys[/{id}]` | API-Keys (nur angemeldete Admins) |
+| GET | `/metrics` | Prometheus |
 
 Beispiele:
 
 ```bash
-# Wer hat in den letzten 24 h auf pve1 die meiste CPU verbraucht? (Cookie aus dem Login)
-curl -s -b jar 'http://localhost:8080/api/v1/analysis/top?metric=cpu&node=pve1&range=24h&limit=5' | jq '.[] | {name, avg, p95, max}'
+# Wer hat in den letzten 24 h auf pve1 die meiste CPU verbraucht?
+curl -s -H "Authorization: Bearer $KEY" 'http://localhost:8080/api/v1/analysis/top?metric=cpu&node=pve1&range=24h&limit=5' | jq '.[] | {name, avg, p95, max}'
 
 # Was lief am 24.10. um 10:15 Uhr auf pve1?
-curl -s -b jar "http://localhost:8080/api/v1/analysis/at?cluster=homelab&node=pve1&at=$(date -d '2026-10-24 10:15' +%s)&window=300" | jq '.guests[:5]'
+curl -s -H "Authorization: Bearer $KEY" "http://localhost:8080/api/v1/analysis/at?cluster=homelab&node=pve1&at=$(date -d '2026-10-24 10:15' +%s)&window=300" | jq '.guests[:5]'
 ```
 
 > Alle Endpunkte außer `/api/v1/health` und dem Login verlangen eine Anmeldung.
@@ -274,12 +364,20 @@ backend/app/
   audit.py              Audit-Log
   db/                   SQLite (SQLAlchemy async): users, sessions, audit_log
   core/crypto.py        Argon2id, Fernet-Verschlüsselung, Tokens
-  pve/mock_actions.py   Mock: Tasks, Statuswechsel, Snapshots, Migration
+  pve/mock_actions.py   Mock: Tasks, Statuswechsel, Snapshots, Migration, apt, Reboot
+  pve/mock_ssh.py       Mock: SSH-Hilfsskript (Upgrade-Ausgabe, DMI, Sensoren)
+  nodes/service.py      Updates, Upgrade, Wartungsmodus, Neustart, Sensoren, Host-Keys
+  jobs.py               Jobs mit Live-Log (SSE) und Log-Dateien
+  ssh.py                asyncssh-Runner mit Host-Key-Prüfung
+  alerts/               Metrik-Katalog, Regel-Engine, Benachrichtigungen
+  auth/apikeys.py       API-Keys mit Scopes
+  api/prometheus.py     /metrics
   core/web.py           Security-Header, CSP, Auslieferung der SPA
 frontend/src/
   lib/live.svelte.ts    SSE-Client + Live-Historie im Browser
   lib/auth.svelte.ts    Sitzung, Rollen, Fähigkeiten
   routes/               Übersicht, Nodes, Gäste (+ Bulk), Gast-Detail (+ Steuerung), Lastanalyse,
                         Inventar, Aufgaben, Audit-Log, Benutzer, Konto, Login
-deploy/pve-setup-roles.sh
+deploy/pve-setup-roles.sh   Proxmox-Rollen und -Tokens
+deploy/node-setup.sh        SSH-Zugang auf den Nodes (eingeschränkt)
 ```

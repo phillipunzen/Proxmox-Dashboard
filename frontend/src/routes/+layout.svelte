@@ -8,8 +8,11 @@
 	import { auth, type Role } from '#lib/auth.svelte.js';
 	import { live } from '#lib/live.svelte.js';
 	import { timeAgo } from '#lib/format.js';
-	import { taskViewer } from '#lib/toast.svelte.js';
+	import { getJson } from '#lib/api.js';
+	import { jobViewer, taskViewer } from '#lib/toast.svelte.js';
+	import JobLogDialog from '#lib/components/JobLogDialog.svelte';
 	import TaskLogDialog from '#lib/components/TaskLogDialog.svelte';
+	import type { AlertEvent } from '#lib/types.js';
 	import Toasts from '#lib/components/Toasts.svelte';
 	import type { LayoutProps } from './$types';
 
@@ -21,8 +24,11 @@
 		{ href: '/guests', label: 'Gäste', icon: 'M4 6h16M4 12h16M4 18h16' },
 		{ href: '/analysis', label: 'Lastanalyse', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
 		{ href: '/inventory', label: 'Inventar', icon: 'M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7M12 11v10' },
+		{ href: '/alerts', label: 'Alarme', icon: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0' },
 		{ href: '/tasks', label: 'Aufgaben', icon: 'M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2' },
 		{ href: '/audit', label: 'Audit-Log', icon: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z' },
+		{ href: '/admin/api-keys', label: 'API-Keys', icon: 'M15 7a4 4 0 1 1-3.9 5H8v3H5v-3H2V9h9.1A4 4 0 0 1 15 7z', role: 'admin' },
+		{ href: '/admin/ssh', label: 'SSH', icon: 'M4 17l6-6-6-6M12 19h8', role: 'admin' },
 		{ href: '/admin/users', label: 'Benutzer', icon: 'M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M22 19v-1a4 4 0 0 0-3-3.9M16 4.1a3 3 0 0 1 0 5.8', role: 'admin' }
 	];
 	const isLogin = $derived(page.url.pathname === '/login');
@@ -63,6 +69,18 @@
 			live.start();
 		}
 	});
+
+	// Firing alerts for the badge in the navigation.
+	let firing = $state<AlertEvent[]>([]);
+	$effect(() => {
+		if (!auth.ready) return;
+		const load = () => getJson<AlertEvent[]>('/api/v1/alerts', { state: 'firing' }).then((a) => (firing = a)).catch(() => {});
+		load();
+		const t = setInterval(load, 30_000);
+		return () => clearInterval(t);
+	});
+	const worst = $derived(firing.some((a) => a.severity === 'critical') ? 'bg-red-500' : 'bg-amber-500');
+	const openAlerts = $derived(firing.filter((a) => a.severity !== 'info' && !a.acknowledged_by).length);
 
 	async function logout() {
 		live.stop();
@@ -130,6 +148,9 @@
 						<path d={item.icon} stroke-linecap="round" stroke-linejoin="round" />
 					</svg>
 					{item.label}
+					{#if item.href === '/alerts' && openAlerts}
+						<span class="ml-auto rounded-full px-1.5 text-[11px] font-semibold text-white {worst}">{openAlerts}</span>
+					{/if}
 				</a>
 			{/each}
 		</nav>
@@ -220,6 +241,9 @@
 {/if}
 
 <Toasts />
+{#if jobViewer.current}
+	<JobLogDialog id={jobViewer.current} onclose={() => jobViewer.close()} />
+{/if}
 {#if taskViewer.current}
 	<TaskLogDialog cluster={taskViewer.current.cluster} upid={taskViewer.current.upid} onclose={() => taskViewer.close()} />
 {/if}

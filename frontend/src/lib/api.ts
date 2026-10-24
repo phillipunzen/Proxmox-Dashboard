@@ -63,7 +63,7 @@ export async function getJson<T>(path: string, params: Params = {}, signal?: Abo
 }
 
 export async function send<T>(
-	method: 'POST' | 'PATCH' | 'DELETE',
+	method: 'POST' | 'PUT' | 'PATCH' | 'DELETE',
 	path: string,
 	body?: unknown,
 	params: Params = {}

@@ -45,7 +45,18 @@ class ClusterConfig(BaseModel):
     # Second token with the Dashboard-Operator role. Without it, control actions are disabled.
     operator_token_id: str = ""
     operator_token_secret: SecretStr = SecretStr("")
+    # Third token with Dashboard-NodeAdmin (Sys.Modify, Sys.PowerMgmt): update list, apt update,
+    # node reboot. Without it, node actions are disabled.
+    nodeadmin_token_id: str = ""
+    nodeadmin_token_secret: SecretStr = SecretStr("")
+    # SSH address per node if it differs from the cluster IP: {"pve1": "10.0.0.11"}
+    ssh_hosts: dict[str, str] = {}
     mock: bool = False
+
+    @property
+    def has_nodeadmin_token(self) -> bool:
+        return self.mock or bool(self.nodeadmin_token_id and
+                                 self.nodeadmin_token_secret.get_secret_value())
 
     @property
     def has_operator_token(self) -> bool:
@@ -103,6 +114,24 @@ class Settings(BaseSettings):
     session_idle_minutes: float = Field(default=120.0, ge=5.0, le=10080.0)
     # "auto" = Secure cookie when the request arrived via HTTPS (also behind a reverse proxy).
     cookie_secure: str = Field(default="auto", pattern="^(auto|true|false)$")
+    # /metrics without authentication (only if the port is not reachable from untrusted nets).
+    metrics_public: bool = False
+
+    # --- node management (phase 4) ------------------------------------------------------------
+    ssh_user: str = "pve-dashboard"
+    ssh_port: int = Field(default=22, ge=1, le=65535)
+    # Seconds between reading the list of available updates (Proxmox refreshes it daily).
+    update_check_interval: float = Field(default=21600.0, ge=300.0)
+    # Seconds between temperature reads via SSH (0 = off).
+    sensors_interval: float = Field(default=60.0, ge=0.0)
+    # Max. seconds to wait for a node to come back after a reboot.
+    reboot_timeout: float = Field(default=900.0, ge=60.0)
+
+    # --- alerting -------------------------------------------------------------------------------
+    # Minimum seconds between two rule evaluations.
+    alert_eval_interval: float = Field(default=10.0, ge=1.0, le=600.0)
+    # Public URL of the dashboard, used for links in notifications (e.g. https://pve-dash.lan).
+    dashboard_url: str = ""
 
     @property
     def totp_roles(self) -> set[str]:
@@ -134,6 +163,9 @@ def load_clusters(environ: Mapping[str, str] | None = None) -> list[ClusterConfi
                 web_url=g.get("WEB_URL") or None,
                 operator_token_id=g.get("OPERATOR_TOKEN_ID", ""),
                 operator_token_secret=SecretStr(g.get("OPERATOR_TOKEN_SECRET", "")),
+                nodeadmin_token_id=g.get("NODEADMIN_TOKEN_ID", ""),
+                nodeadmin_token_secret=SecretStr(g.get("NODEADMIN_TOKEN_SECRET", "")),
+                ssh_hosts=_pairs(g.get("SSH_HOSTS", "")),
             )
         )
 
@@ -141,6 +173,16 @@ def load_clusters(environ: Mapping[str, str] | None = None) -> list[ClusterConfi
     if len(names) != len(set(names)):
         raise ValueError(f"Duplicate cluster names in PVE_<n>_NAME: {names}")
     return clusters
+
+
+def _pairs(value: str) -> dict[str, str]:
+    """``pve1=10.0.0.11,pve2=10.0.0.12`` -> dict."""
+    out: dict[str, str] = {}
+    for part in value.split(","):
+        if "=" in part:
+            k, v = part.split("=", 1)
+            out[k.strip()] = v.strip()
+    return out
 
 
 def mock_clusters() -> list[ClusterConfig]:

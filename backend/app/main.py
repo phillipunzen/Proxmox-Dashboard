@@ -14,13 +14,19 @@ from fastapi import Depends, FastAPI
 
 from app import __version__
 from app.actions.service import ActionService, TaskWatcher
+from app.alerts.engine import AlertEngine
+from app.alerts.notify import Notifier
+from app.api import prometheus
 from app.api.v1.actions import router as actions_router
-from app.api.v1.auth import Limiters, users_router
+from app.api.v1.alerts import router as alerts_router
+from app.api.v1.auth import Limiters, keys_router, users_router
 from app.api.v1.auth import router as auth_router
 from app.api.v1.history import router as history_router
 from app.api.v1.inventory import router as inventory_router
+from app.api.v1.nodes import router as nodes_router
 from app.api.v1.routes import public_router
 from app.api.v1.routes import router as v1_router
+from app.auth.apikeys import ApiKeyService
 from app.auth.deps import require_role
 from app.auth.service import AuthService
 from app.collector.poller import Collector
@@ -30,7 +36,17 @@ from app.core.crypto import Encryptor, load_or_create_app_key
 from app.core.web import OriginCheckMiddleware, SecurityHeadersMiddleware, mount_spa
 from app.db.engine import Database
 from app.inventory.collector import InventoryCollector, InventoryStore
-from app.pve import MockPveClient, PveApi, make_client, make_operator_client
+from app.jobs import JobManager
+from app.nodes.service import NodeService
+from app.pve import (
+    MockPveClient,
+    PveApi,
+    make_client,
+    make_nodeadmin_client,
+    make_operator_client,
+)
+from app.pve.mock_ssh import MockSshRunner
+from app.ssh import AsyncSshRunner, SshRunner
 from app.tsdb.backfill import backfill_if_empty
 from app.tsdb.client import TsdbClient
 
@@ -57,8 +73,10 @@ async def _housekeeping(auth: AuthService) -> None:
 
 def create_app(settings: Settings | None = None,
                clients: dict[str, PveApi] | None = None,
-               tsdb_client: TsdbClient | None = None) -> FastAPI:
-    """Application factory. Tests inject settings, (mock) clients and a TSDB client."""
+               tsdb_client: TsdbClient | None = None,
+               ssh_runner: SshRunner | None = None,
+               notifier: Notifier | None = None) -> FastAPI:
+    """Application factory. Tests inject settings, (mock) clients, TSDB client, SSH runner."""
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level.upper(),
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -69,7 +87,9 @@ def create_app(settings: Settings | None = None,
         db = app.state.db = Database.for_data_dir(settings.data_dir)
         await db.create_all()
         key = load_or_create_app_key(settings.data_dir, settings.app_secret_key.get_secret_value())
-        auth = app.state.auth = AuthService(db, settings, Encryptor(key))
+        enc = app.state.encryptor = Encryptor(key)
+        auth = app.state.auth = AuthService(db, settings, enc)
+        app.state.api_keys = ApiKeyService(db)
         generated = await auth.bootstrap_admin()
         if generated:
             # Printed once; the admin has to change it at the first login.
@@ -84,6 +104,8 @@ def create_app(settings: Settings | None = None,
         cl = clients or {c.name: make_client(c) for c in clusters}
         op_clients = {c.name: op for c in clusters
                       if (op := make_operator_client(c, cl[c.name])) is not None}
+        na_clients = {c.name: na for c in clusters
+                      if (na := make_nodeadmin_client(c, cl[c.name])) is not None}
         tsdb = app.state.tsdb = tsdb_client or (TsdbClient(settings.vm_url)
                                                  if settings.vm_url else None)
         background: list[asyncio.Task[None]] = [asyncio.create_task(_housekeeping(auth))]
@@ -108,6 +130,21 @@ def create_app(settings: Settings | None = None,
         app.state.actions = ActionService(settings, clusters, op_clients, app.state.store, db)
         watcher = app.state.task_watcher = TaskWatcher(db, cl)
         watcher.start()
+
+        jobs = app.state.jobs = JobManager(db, settings.data_dir)
+        await jobs.recover()
+        mocks = {n: c for n, c in cl.items() if isinstance(c, MockPveClient)}
+        ssh = ssh_runner or (MockSshRunner(mocks) if mocks else
+                             AsyncSshRunner(settings.data_dir, settings.ssh_user))
+        nodes = app.state.nodes = NodeService(settings, clusters, cl, op_clients, na_clients,
+                                              app.state.store, db, jobs, ssh)
+        nodes.start()
+        inventory.mainboard = nodes.mainboard
+
+        alerts = app.state.alerts = AlertEngine(db, settings, app.state.store, app.state.inventory,
+                                                nodes, cl, enc, notifier)
+        await alerts.seed_defaults()
+        alerts.start()
         mode = "READ-ONLY" if settings.read_only else ("DRY-RUN" if settings.dry_run else "LIVE")
         log.info("Control actions: %s (operator token for: %s)", mode,
                  ", ".join(op_clients) or "none")
@@ -116,12 +153,15 @@ def create_app(settings: Settings | None = None,
         finally:
             for task in background:
                 task.cancel()
+            await alerts.stop()
+            await nodes.stop()
+            await jobs.shutdown()
             await watcher.stop()
             await inventory.stop()
             await collector.stop()
-            for op in op_clients.values():
-                if op not in cl.values():
-                    await op.aclose()
+            for extra in [*op_clients.values(), *na_clients.values()]:
+                if extra not in cl.values():
+                    await extra.aclose()
             if tsdb:
                 await tsdb.aclose()
             await db.dispose()
@@ -150,10 +190,14 @@ def create_app(settings: Settings | None = None,
     app.include_router(public_router)
     app.include_router(auth_router)
     app.include_router(users_router)
+    app.include_router(keys_router)
     app.include_router(v1_router, dependencies=logged_in)
     app.include_router(history_router, dependencies=logged_in)
     app.include_router(inventory_router, dependencies=logged_in)
     app.include_router(actions_router)
+    app.include_router(nodes_router)
+    app.include_router(alerts_router)
+    app.include_router(prometheus.make_router(settings.metrics_public))
     if not mount_spa(app, settings.static_dir):
         log.info("No frontend build at %s - serving API only", settings.static_dir)
     return app

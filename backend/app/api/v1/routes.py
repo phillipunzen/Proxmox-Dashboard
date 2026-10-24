@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import __version__
-from app.auth.deps import COOKIE
+from app.auth.deps import COOKIE, api_key_from
 from app.collector.models import (
     ClusterSnapshot,
     ClusterWarning,
@@ -206,6 +206,14 @@ async def stream(request: Request) -> StreamingResponse:
 
     auth = request.app.state.auth
     token = request.cookies.get(COOKIE)
+    key = api_key_from(request)
+    keys = request.app.state.api_keys
+
+    async def still_valid() -> bool:
+        if key:
+            return await keys.verify(key, None) is not None
+        info = await auth.resolve(token)
+        return info is not None and not info.pending
 
     async def events() -> AsyncIterator[str]:
         version = -1
@@ -215,8 +223,7 @@ async def stream(request: Request) -> StreamingResponse:
             changed = await store.wait_for_change(version, SSE_HEARTBEAT)
             if not changed:
                 # Long-lived stream: end it when the session expired or was revoked.
-                info = await auth.resolve(token)
-                if info is None or info.pending:
+                if not await still_valid():
                     yield "event: logout\ndata: {}\n\n"
                     break
                 yield ": keepalive\n\n"

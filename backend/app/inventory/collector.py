@@ -6,6 +6,7 @@ import asyncio
 import contextlib
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -45,6 +46,8 @@ class InventoryCollector:
         self._task: asyncio.Task[None] | None = None
         self._lock = asyncio.Lock()
         self._last_run = 0.0
+        # Optional (cluster, node) -> mainboard text, provided via SSH by the node service.
+        self.mainboard: Callable[[str, str], Awaitable[str | None]] | None = None
 
     def start(self) -> None:
         self._task = asyncio.create_task(self._loop(), name="inventory")
@@ -143,6 +146,8 @@ class InventoryCollector:
             hw.boot_mode = boot.get("mode")
             if "secureboot" in boot:
                 hw.secure_boot = bool(boot["secureboot"])
+        if self.mainboard:
+            hw.mainboard = await self.mainboard(cluster, node)
         hw.disks = parse.parse_disks(disks or [])
         hw.network = parse.parse_network(net or [])
         hw.pci = parse.parse_pci(pci or [])

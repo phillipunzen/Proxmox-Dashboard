@@ -38,3 +38,18 @@ class TaskViewer {
 }
 
 export const taskViewer = new TaskViewer();
+
+/** Global live log viewer for dashboard jobs (upgrade, maintenance, reboot). */
+class JobViewer {
+	current = $state<number | null>(null);
+
+	open(id: number) {
+		this.current = id;
+	}
+
+	close() {
+		this.current = null;
+	}
+}
+
+export const jobViewer = new JobViewer();

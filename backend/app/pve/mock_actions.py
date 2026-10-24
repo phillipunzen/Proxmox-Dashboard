@@ -49,12 +49,28 @@ class MockSnapshot:
     parent: str | None = None
 
 
+APT_PACKAGES = [
+    ("pve-manager", "9.0.10", "9.0.11", "Proxmox Virtual Environment Management Tools"),
+    ("proxmox-kernel-6.14", "6.14.11-4", "6.14.11-5", "Latest Proxmox Kernel Image"),
+    ("qemu-server", "9.0.21", "9.0.23", "Qemu Server Tools"),
+    ("libpve-common-perl", "9.0.11", "9.0.12", "Proxmox VE base library"),
+    ("zfsutils-linux", "2.3.4-pve1", "2.3.4-pve2", "command-line tools to manage OpenZFS"),
+    ("openssl", "3.5.1-1", "3.5.1-1+deb13u1", "Secure Sockets Layer toolkit"),
+    ("tzdata", "2025b-4", "2025b-5", "time zone and daylight-saving time data"),
+]
+
+
 class MockActions:
     def __init__(self, mock: MockPveClient):
         self.mock = mock
         self.tasks: list[MockTask] = []
         self.snapshots: dict[int, list[MockSnapshot]] = {}
         self._pid = 1000
+        # Pending apt updates per node; edge is up to date.
+        self.apt: dict[str, list[tuple[str, str, str, str]]] = {
+            n.name: list(APT_PACKAGES[: 7 - i * 2]) for i, n in enumerate(mock.spec.nodes)
+            if n.name != "edge"}
+        self.reboot_required: dict[str, bool] = {}
         self._seed()
 
     # --- helpers --------------------------------------------------------------------------------
@@ -113,6 +129,19 @@ class MockActions:
 
     def get(self, path: str, params: dict[str, Any]) -> Any:
         self.advance()
+        m = re.fullmatch(r"/nodes/([^/]+)/apt/(update|changelog)", path)
+        if m:
+            node = m.group(1)
+            if m.group(2) == "changelog":
+                name = params.get("name", "")
+                return (f"{name} ({params.get('version', 'new')}) trixie; urgency=medium\n\n"
+                        "  * fix various issues and improve performance\n"
+                        "  * update translations\n\n -- Proxmox Support Team  Mon, 20 Oct 2026\n")
+            return [{"Package": p, "OldVersion": old, "Version": new, "Title": title,
+                     "Section": "admin", "Priority": "optional",
+                     "Origin": "Proxmox" if p.startswith(("pve", "proxmox", "qemu", "libpve",
+                                                           "zfs")) else "Debian"}
+                    for p, old, new, title in self.apt.get(node, [])]
         if path == "/cluster/tasks":
             return [self._task_dict(t) for t in reversed(self.tasks)]
         m = re.fullmatch(r"/nodes/([^/]+)/tasks", path)
@@ -164,6 +193,17 @@ class MockActions:
 
     def post(self, path: str, data: dict[str, Any]) -> Any:
         self.advance()
+        m = re.fullmatch(r"/nodes/([^/]+)/apt/update", path)
+        if m:
+            t = self._task(m.group(1), "aptupdate", "", None)
+            t.log += ["starting apt-get update",
+                      "Hit:1 http://deb.debian.org/debian trixie InRelease",
+                      "Hit:2 http://download.proxmox.com/debian/pve trixie InRelease",
+                      "Reading package lists...", "Building dependency tree..."]
+            return t.upid
+        m = re.fullmatch(r"/nodes/([^/]+)/status", path)
+        if m:
+            return self._reboot(m.group(1), str(data.get("command")), path)
         m = re.fullmatch(r"/nodes/([^/]+)/(qemu|lxc)/(\d+)/status/(\w+)", path)
         if m:
             return self._power(m.group(1), m.group(2), int(m.group(3)), m.group(4), path)
@@ -283,6 +323,30 @@ class MockActions:
         t.log += [f"starting migration of {gtype.upper()} {vmid} to node '{target}'",
                   "migration finished successfully"]
         return t.upid
+
+    def _reboot(self, node: str, command: str, path: str) -> None:
+        n = next((x for x in self.mock.spec.nodes if x.name == node), None)
+        if n is None or not n.online:
+            raise PveError(595, f"node '{node}' not reachable", path)
+        if command not in ("reboot", "shutdown"):
+            raise PveError(400, f"Parameter verification failed: command '{command}'", path)
+        was_running = [g for g in self.mock.spec.guests
+                       if g.node == node and g.status == "running"]
+        for g in was_running:
+            g.status = "stopped"
+        n.online = False
+
+        def boot() -> None:
+            n.online = True
+            self.mock.started = self.mock.clock()  # uptime restarts
+            self.reboot_required[node] = False
+            for g in was_running:
+                g.status = "running"  # onboot=1 in the mock configs
+
+        # Not a PVE task in reality (the call returns null); modelled as one for the timing.
+        t = self._task(node, "srvreboot", "", boot if command == "reboot" else None)
+        t.duration = 25
+        return None
 
     # --- formatting -----------------------------------------------------------------------------
 
