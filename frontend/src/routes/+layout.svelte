@@ -24,6 +24,8 @@
 		{ href: '/guests', label: 'Gäste', icon: 'M4 6h16M4 12h16M4 18h16' },
 		{ href: '/analysis', label: 'Lastanalyse', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
 		{ href: '/inventory', label: 'Inventar', icon: 'M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7M12 11v10' },
+		{ href: '/storage', label: 'Storage', icon: 'M4 6c0-1.7 3.6-3 8-3s8 1.3 8 3-3.6 3-8 3-8-1.3-8-3zM4 6v6c0 1.7 3.6 3 8 3s8-1.3 8-3V6M4 12v6c0 1.7 3.6 3 8 3s8-1.3 8-3v-6' },
+		{ href: '/backups', label: 'Backups', icon: 'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 3' },
 		{ href: '/alerts', label: 'Alarme', icon: 'M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9M10.3 21a1.9 1.9 0 0 0 3.4 0' },
 		{ href: '/tasks', label: 'Aufgaben', icon: 'M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2' },
 		{ href: '/audit', label: 'Audit-Log', icon: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z' },

@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import { onMount } from 'svelte';
 	import favicon from '#lib/assets/favicon.svg';
-	import { send } from '#lib/api.js';
+	import { getJson, send, url } from '#lib/api.js';
 	import { auth, type Me } from '#lib/auth.svelte.js';
 	import TotpSetup from '#lib/components/TotpSetup.svelte';
 
@@ -22,7 +22,14 @@
 	});
 	const step = $derived(auth.me?.pending ?? (auth.me ? 'done' : 'credentials'));
 
+	let sso = $state<{ oidc: boolean; oidc_label: string | null } | null>(null);
+
 	onMount(async () => {
+		// Errors from the SSO callback arrive as ?error=…
+		error = page.url.searchParams.get('error');
+		getJson<{ oidc: boolean; oidc_label: string | null }>('/api/v1/auth/providers')
+			.then((p) => (sso = p))
+			.catch(() => {});
 		if (!auth.checked) await auth.load();
 	});
 
@@ -111,6 +118,13 @@
 					{busy ? 'Prüfe …' : 'Anmelden'}
 				</button>
 			</form>
+			{#if sso?.oidc}
+				<div class="my-4 flex items-center gap-3 text-xs text-zinc-500"><span class="h-px flex-1 bg-zinc-200 dark:bg-zinc-800"></span>oder<span class="h-px flex-1 bg-zinc-200 dark:bg-zinc-800"></span></div>
+				<!-- Full page navigation: the IdP redirect needs a top-level request -->
+				<a href={url('/api/v1/auth/oidc/login', { next })} class="block rounded-lg border border-zinc-300 py-2 text-center text-sm font-medium hover:border-accent hover:text-accent dark:border-zinc-700" data-sveltekit-reload>
+					{sso.oidc_label ?? 'Mit SSO anmelden'}
+				</a>
+			{/if}
 		{:else if step === 'totp'}
 			<form onsubmit={submitCode} class="flex flex-col gap-3">
 				<p class="text-sm text-zinc-500">Code aus der Authenticator-App für <strong>{auth.me?.username}</strong>:</p>

@@ -23,7 +23,7 @@ from app.collector.state import SnapshotStore
 from app.config import Settings
 from app.core.crypto import Encryptor
 from app.db.engine import Database
-from app.db.models import AlertEvent, AlertRule, NotificationChannel, utcnow
+from app.db.models import AlertEvent, AlertRule, KeyValue, NotificationChannel, utcnow
 from app.inventory.collector import InventoryStore
 from app.pve import PveApi, PveError, PveUnavailable
 
@@ -59,6 +59,14 @@ DEFAULT_RULES: list[dict[str, Any]] = [
      "threshold": 1, "for_seconds": 300, "severity": "warning"},
     {"name": "Neustart erforderlich", "metric": "node_reboot_required", "operator": ">=",
      "threshold": 1, "for_seconds": 0, "severity": "info"},
+    {"name": "Kein aktuelles Backup", "metric": "backup_age_hours", "operator": ">",
+     "threshold": 48, "for_seconds": 0, "severity": "warning"},
+    {"name": "Alter Snapshot", "metric": "snapshot_age_days", "operator": ">", "threshold": 30,
+     "for_seconds": 0, "severity": "info"},
+    {"name": "Storage läuft voll (Prognose)", "metric": "storage_days_until_full",
+     "operator": "<", "threshold": 14, "for_seconds": 0, "severity": "warning"},
+    {"name": "Gast ohne Backup-Job", "metric": "backup_not_covered", "operator": ">=",
+     "threshold": 1, "for_seconds": 0, "severity": "info", "enabled": False},
 ]
 
 
@@ -71,6 +79,10 @@ def _fmt(value: float, unit: str) -> str:
         return f"{value:.0f} %"
     if unit == "bool":
         return "ja" if value else "nein"
+    if unit == "hours":
+        return "nie" if value >= 99999 else f"{value:.0f} h"
+    if unit == "days":
+        return f"{value:.0f} Tage"
     return f"{value:g}"
 
 
@@ -91,14 +103,27 @@ class AlertEngine:
         self._backups_at = 0.0
         self._task: asyncio.Task[None] | None = None
         self.clock = time.time
+        self.backups: Any = None  # BackupService, set after construction
 
     # --- lifecycle ------------------------------------------------------------------------------
 
     async def seed_defaults(self) -> None:
+        """Add default rules that were never seeded (new versions bring new defaults).
+
+        Rules the user deleted are not re-created: seeded names are remembered.
+        """
         async with self.db.session() as s:
-            if await s.scalar(select(func.count(AlertRule.id))):
-                return
-            s.add_all(AlertRule(**r) for r in DEFAULT_RULES)
+            kv = await s.get(KeyValue, "alert_defaults")
+            if kv is None:
+                existing = {r.name for r in await s.scalars(select(AlertRule))}
+                kv = KeyValue(key="alert_defaults", value={"seeded": sorted(existing)})
+                s.add(kv)
+            seeded = set(kv.value.get("seeded", []))
+            for r in DEFAULT_RULES:
+                if r["name"] not in seeded:
+                    s.add(AlertRule(**r))
+                    seeded.add(r["name"])
+            kv.value = {"seeded": sorted(seeded)}
             await s.commit()
 
     def start(self) -> None:
@@ -159,6 +184,9 @@ class AlertEngine:
             reboot_required={k: bool(v.reboot_required) for k, v in upd.items()
                              if v.reboot_required is not None},
             failed_backups=dict(self._failed_backups),
+            backups=[g for rows in self.backups.guests.values() for g in rows]
+            if self.backups else [],
+            forecasts=list(self.backups.forecasts) if self.backups else [],
         )
 
     # --- evaluation -----------------------------------------------------------------------------

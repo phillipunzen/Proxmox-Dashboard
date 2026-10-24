@@ -17,7 +17,7 @@
 	const KIND: Record<string, string> = {
 		upgrade: 'Paket-Upgrade', 'apt-refresh': 'Paketlisten aktualisieren',
 		'maintenance-on': 'Wartungsmodus aktivieren', 'maintenance-off': 'Wartungsmodus beenden',
-		reboot: 'Neustart'
+		reboot: 'Neustart', 'guest-upgrade': 'Paket-Upgrade im Gast'
 	};
 
 	async function scroll() {

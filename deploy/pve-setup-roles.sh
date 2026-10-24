@@ -5,6 +5,9 @@
 #   bash pve-setup-roles.sh            # read-only token only (phase 1/2)
 #   bash pve-setup-roles.sh --operator # additionally the operator token (phase 3+)
 #   bash pve-setup-roles.sh --node-admin # additionally node-level token (updates, reboot)
+#   bash pve-setup-roles.sh --operator --guest-updates
+#                                      # operator may run apt in VMs via the guest agent
+#                                      # (VM.GuestAgent.Unrestricted = root inside the guest!)
 #
 # Token secrets are printed ONCE by Proxmox - copy them into the dashboard's .env.
 set -euo pipefail
@@ -19,9 +22,11 @@ NODE_PRIVS="${OP_PRIVS},Sys.Modify,Sys.PowerMgmt"
 
 want_operator=false
 want_node_admin=false
+want_guest_updates=false
 for arg in "$@"; do
   case "$arg" in
     --operator) want_operator=true ;;
+    --guest-updates) want_operator=true; want_guest_updates=true ;;
     --node-admin) want_operator=true; want_node_admin=true ;;
     *) echo "Unknown option: $arg" >&2; exit 1 ;;
   esac
@@ -49,6 +54,8 @@ ensure_token() { # tokenid role
   pveum acl modify / --tokens "$full" --roles "$2"
 }
 
+$want_guest_updates && OP_PRIVS="${OP_PRIVS},VM.GuestAgent.Unrestricted" \
+  && NODE_PRIVS="${NODE_PRIVS},VM.GuestAgent.Unrestricted"
 ensure_role Dashboard-ReadOnly "$RO_PRIVS"
 $want_operator && ensure_role Dashboard-Operator "$OP_PRIVS"
 $want_node_admin && ensure_role Dashboard-NodeAdmin "$NODE_PRIVS"

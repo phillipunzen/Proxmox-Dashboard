@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
 
 from app import audit
-from app.auth.deps import Principal, actor, admin, viewer
+from app.auth.deps import Principal, actor, admin, operator, viewer
 from app.jobs import JobManager, JobView
 from app.nodes.service import NodeError, NodeService, NodeStatusView, UpdateInfo
 
@@ -268,3 +268,21 @@ async def ssh_test(request: Request, body: NodeRef, _: Principal = admin) -> dic
         return {"ok": False, "message": "Zeitüberschreitung"}
     mainboard = await svc.mainboard(body.cluster, body.node)
     return {"ok": True, "message": out.strip(), "mainboard": mainboard}
+
+
+# --- guest updates (optional) ---------------------------------------------------------------
+
+
+@router.get("/clusters/{cluster}/guests/{vmid}/os-updates", tags=["guest-updates"],
+            summary="Count pending apt updates inside a guest (GUEST_UPDATES=true)")
+async def guest_updates_check(request: Request, cluster: str, vmid: int,
+                              _: Principal = operator) -> dict[str, Any]:
+    return await _run(request.app.state.guest_updates.check(cluster, vmid))
+
+
+@router.post("/clusters/{cluster}/guests/{vmid}/os-upgrade", response_model=JobStarted,
+             tags=["guest-updates"], summary="apt dist-upgrade inside a guest (job)")
+async def guest_upgrade(request: Request, cluster: str, vmid: int, body: Confirm,
+                        p: Principal = operator) -> JobStarted:
+    return JobStarted(job_id=await _run(request.app.state.guest_updates.upgrade(
+        actor(request, p), cluster, vmid, body.confirm)))

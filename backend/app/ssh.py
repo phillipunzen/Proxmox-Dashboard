@@ -25,6 +25,16 @@ import asyncssh
 log = logging.getLogger(__name__)
 
 VERBS = ("upgrade", "update", "dmi", "sensors", "reboot-required", "version")
+# Verbs that take exactly one numeric argument (a container VMID).
+VMID_VERBS = ("lxc-check", "lxc-upgrade")
+
+
+def valid_command(command: str) -> bool:
+    parts = command.split(" ")
+    if len(parts) == 1:
+        return parts[0] in VERBS
+    return (len(parts) == 2 and parts[0] in VMID_VERBS and parts[1].isdigit()
+            and 100 <= int(parts[1]) <= 999_999_999)
 CONNECT_TIMEOUT = 10
 
 
@@ -93,7 +103,7 @@ class AsyncSshRunner:
                   on_line: Callable[[str], None] | None = None,
                   timeout: float = 3600) -> tuple[int, str]:
         """Run one allowed verb; stream merged stdout/stderr lines. Returns (exit, output)."""
-        if verb not in VERBS:
+        if not valid_command(verb):
             raise SshError(f"Unbekannter Befehl: {verb}")
         if not target.host_key:
             key, fp = await self.scan_host_key(target.host, target.port)

@@ -47,6 +47,29 @@ services:
     #   - "127.0.0.1:8428:8428"
     logging: *logging
 
+  # Optional MCP server for AI assistants:  docker compose --profile mcp up -d
+  mcp:
+    build: ./mcp-server
+    image: proxmox-dashboard-mcp:latest
+    container_name: proxmox-dashboard-mcp
+    profiles: ["mcp"]
+    restart: unless-stopped
+    environment:
+      DASHBOARD_URL: http://dashboard:8000
+      DASHBOARD_API_KEY: ${MCP_DASHBOARD_API_KEY:-}
+      MCP_AUTH_TOKEN: ${MCP_AUTH_TOKEN:-}
+      MCP_TRANSPORT: http
+    ports:
+      - "${MCP_PORT:-8765}:8765"
+    depends_on:
+      - dashboard
+    read_only: true
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    logging: *logging
+
 volumes:
   app-data:
   vm-data:

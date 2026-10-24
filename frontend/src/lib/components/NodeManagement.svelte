@@ -95,7 +95,7 @@
 
 	const KIND: Record<string, string> = {
 		upgrade: 'Upgrade', 'apt-refresh': 'Paketlisten', 'maintenance-on': 'Wartung an',
-		'maintenance-off': 'Wartung aus', reboot: 'Neustart'
+		'maintenance-off': 'Wartung aus', reboot: 'Neustart', 'guest-upgrade': 'Gast-Upgrade'
 	};
 	const btn = 'rounded-lg border border-zinc-300 px-3 py-1.5 text-sm hover:border-accent hover:text-accent disabled:opacity-40 dark:border-zinc-700';
 </script>

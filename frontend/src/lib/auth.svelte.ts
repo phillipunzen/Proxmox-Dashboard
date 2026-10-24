@@ -8,6 +8,7 @@ const LEVEL: Record<Role, number> = { viewer: 0, operator: 1, admin: 2 };
 export interface Me {
 	username: string;
 	role: Role;
+	auth_source: 'local' | 'oidc';
 	totp_enabled: boolean;
 	totp_required: boolean;
 	must_change_password: boolean;

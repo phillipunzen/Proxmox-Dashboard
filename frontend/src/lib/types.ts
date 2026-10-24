@@ -124,6 +124,7 @@ export interface Meta {
 	mock: boolean;
 	read_only: boolean;
 	dry_run: boolean;
+	guest_updates: boolean;
 	poll_interval: number;
 	history: boolean;
 	clusters: string[];
@@ -446,4 +447,58 @@ export interface Channel {
 	enabled: boolean;
 	min_severity: Severity;
 	send_resolved: boolean;
+}
+
+// --- Phase 5: backups, storage forecast ----------------------------------------------------
+
+export interface BackupVolume {
+	volid: string;
+	storage: string;
+	ctime: string;
+	size: number | null;
+	verified: string | null;
+	protected: boolean;
+	notes: string | null;
+}
+
+export interface GuestBackups {
+	cluster: string;
+	vmid: number;
+	name: string;
+	type: GuestType;
+	node: string;
+	status: string;
+	last_backup: BackupVolume | null;
+	backup_count: number;
+	age_hours: number | null;
+	covered_by: string[];
+	snapshots: number;
+	oldest_snapshot_days: number | null;
+	state: 'ok' | 'old' | 'missing' | 'not_covered' | 'failed_verify';
+}
+
+export interface BackupJob {
+	cluster: string;
+	id: string;
+	enabled: boolean;
+	schedule: string | null;
+	storage: string | null;
+	selection: string;
+	node: string | null;
+	mode: string | null;
+	comment: string | null;
+	vmids: number[];
+}
+
+export interface StorageForecast {
+	cluster: string;
+	node: string;
+	storage: string;
+	type: string;
+	used: number;
+	total: number;
+	growth_per_day: number | null;
+	days_until_full: number | null;
+	days_until_90: number | null;
+	samples: number;
 }

@@ -51,6 +51,7 @@ class Meta(BaseModel):
     mock: bool
     read_only: bool
     dry_run: bool
+    guest_updates: bool
     poll_interval: float
     history: bool
     clusters: list[str]
@@ -64,7 +65,8 @@ class Health(BaseModel):
 async def meta(request: Request) -> Meta:
     s = request.app.state.settings
     return Meta(version=__version__, mock=s.pve_mock, read_only=s.read_only, dry_run=s.dry_run,
-                poll_interval=s.poll_interval, history=request.app.state.tsdb is not None,
+                guest_updates=s.guest_updates, poll_interval=s.poll_interval,
+                history=request.app.state.tsdb is not None,
                 clusters=[c.name for c in _store(request).all()])
 
 

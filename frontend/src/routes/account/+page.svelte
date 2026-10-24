@@ -71,6 +71,12 @@
 <h1 class="mb-4 text-xl font-semibold">Mein Konto</h1>
 
 <div class="grid gap-4 lg:grid-cols-2">
+	{#if auth.me?.auth_source === 'oidc'}
+	<div class="card text-sm lg:col-span-2">
+		<span class="label">Anmeldung über SSO</span>
+		<p class="mt-2 text-zinc-500">Dein Konto wird über den Identity Provider verwaltet. Passwort, Zwei-Faktor und Gruppen (→ Rolle „{auth.me.role}“) änderst du dort; die Rolle wird bei jeder Anmeldung übernommen.</p>
+	</div>
+	{:else}
 	<div class="card">
 		<span class="label">Passwort ändern</span>
 		<form onsubmit={changePassword} class="mt-3 flex flex-col gap-3 text-sm">
@@ -103,6 +109,8 @@
 			<button class="mt-3 rounded-lg bg-accent px-3 py-1.5 font-medium text-white" onclick={() => (showSetup = true)}>Einrichten</button>
 		{/if}
 	</div>
+
+	{/if}
 
 	<div class="card overflow-x-auto p-0 lg:col-span-2">
 		<div class="label px-4 pt-4">Aktive Sitzungen</div>

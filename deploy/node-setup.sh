@@ -11,8 +11,10 @@
 #   * authorized_keys: restrict + forced command -> the key can ONLY start the dispatcher
 #     /usr/local/sbin/pve-dashboard-ssh, no shell, no port/agent/X11 forwarding
 #   * the dispatcher accepts a fixed list of verbs and calls the root helper via ONE sudo rule
+#     (lxc-check/lxc-upgrade additionally take a numeric container ID - optional guest updates)
 #
-# Honest caveat: "upgrade" runs apt as root, and package maintainer scripts run as root.
+# Honest caveat: "upgrade" runs apt as root, and package maintainer scripts run as root;
+# lxc-upgrade does the same inside a container.
 # Whoever controls the dashboard's private key can therefore install updates from your
 # configured repositories - but cannot run arbitrary commands.
 set -euo pipefail
@@ -56,9 +58,17 @@ chmod 600 "$HOME_DIR/.ssh/authorized_keys"
 cat > "$DISPATCH" <<'EOF'
 #!/bin/sh
 # Forced command for the dashboard key: only the verbs below are allowed.
+set -f  # no globbing of the client-supplied string
 case "$SSH_ORIGINAL_COMMAND" in
   upgrade|update|dmi|sensors|reboot-required|version)
     exec sudo -n /usr/local/sbin/pve-dashboard-helper "$SSH_ORIGINAL_COMMAND" ;;
+  "lxc-check "*|"lxc-upgrade "*)
+    verb=${SSH_ORIGINAL_COMMAND%% *}
+    vmid=${SSH_ORIGINAL_COMMAND#* }
+    case "$vmid" in
+      ""|*[!0-9]*) echo "pve-dashboard: invalid vmid" >&2; exit 126 ;;
+    esac
+    exec sudo -n /usr/local/sbin/pve-dashboard-helper "$verb" "$vmid" ;;
   *)
     echo "pve-dashboard: command not allowed: $SSH_ORIGINAL_COMMAND" >&2
     exit 126 ;;
@@ -94,8 +104,20 @@ case "${1:-}" in
     running=$(uname -r)
     newest=$(ls -1 /boot/vmlinuz-*-pve 2>/dev/null | sed 's|/boot/vmlinuz-||' | sort -V | tail -n1)
     if [ -n "$newest" ] && [ "$newest" != "$running" ]; then echo yes; else echo no; fi ;;
+  lxc-check|lxc-upgrade)
+    # Optional guest updates (GUEST_UPDATES=true): Debian/Ubuntu containers only.
+    vmid="${2:-}"
+    case "$vmid" in ""|*[!0-9]*) echo "invalid vmid" >&2; exit 2 ;; esac
+    ostype=$(pct config "$vmid" 2>/dev/null | sed -n 's/^ostype: //p')
+    case "$ostype" in debian|ubuntu) ;; *) echo "unsupported ostype: $ostype" >&2; exit 3 ;; esac
+    if [ "$1" = lxc-check ]; then
+      pct exec "$vmid" -- sh -c 'apt-get update -qq >/dev/null 2>&1; apt list --upgradable 2>/dev/null | grep -c "upgradable from" || true'
+    else
+      pct exec "$vmid" -- env DEBIAN_FRONTEND=noninteractive sh -c \
+        'apt-get update && apt-get -y -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold dist-upgrade'
+    fi ;;
   version)
-    echo "pve-dashboard-helper 1" ;;
+    echo "pve-dashboard-helper 2" ;;
   *)
     echo "unknown action" >&2; exit 2 ;;
 esac

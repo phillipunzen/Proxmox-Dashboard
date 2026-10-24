@@ -7,7 +7,7 @@ import json
 from collections.abc import Callable
 
 from app.pve.mock import MockPveClient
-from app.ssh import VERBS, HostKeyUnknown, SshError, SshTarget
+from app.ssh import HostKeyUnknown, SshError, SshTarget, valid_command
 
 MOCK_HOST_KEY = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIMockHostKeyForDevelopmentOnly000000000000"
 MOCK_FP = "SHA256:mockmockmockmockmockmockmockmockmockmockmo"
@@ -33,7 +33,7 @@ class MockSshRunner:
     async def run(self, target: SshTarget, verb: str,
                   on_line: Callable[[str], None] | None = None,
                   timeout: float = 3600) -> tuple[int, str]:
-        if verb not in VERBS:
+        if not valid_command(verb):
             raise SshError(f"Unbekannter Befehl: {verb}")
         if not target.host_key:
             raise HostKeyUnknown(target.host, MOCK_FP, MOCK_HOST_KEY)
@@ -61,6 +61,18 @@ class MockSshRunner:
             await emit("yes" if mock.actions.reboot_required.get(target.node) else "no", 0)
         elif verb == "version":
             await emit("pve-dashboard-helper 1", 0)
+        elif verb.startswith("lxc-"):
+            vmid = int(verb.split()[1])
+            pending = mock.actions.guest_apt.get(vmid, 0)
+            if verb.startswith("lxc-check"):
+                await emit(str(pending), 0)
+            else:
+                await emit(f"pct exec {vmid} -- apt-get update && apt-get -y dist-upgrade")
+                await emit("Reading package lists... Done")
+                await emit(f"{pending} upgraded, 0 newly installed, 0 to remove")
+                for i in range(pending):
+                    await emit(f"Setting up libexample{i} (1.{i}.1) ...")
+                mock.actions.guest_apt[vmid] = 0
         elif verb in ("update", "upgrade"):
             await emit("Hit:1 http://deb.debian.org/debian trixie InRelease")
             await emit("Hit:2 http://download.proxmox.com/debian/pve trixie InRelease")

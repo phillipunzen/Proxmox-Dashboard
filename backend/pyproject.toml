@@ -1,6 +1,6 @@
 [project]
 name = "proxmox-dashboard"
-version = "0.1.0"
+version = "1.0.0"
 description = "Self-hosted Proxmox VE cluster dashboard with monitoring API"
 requires-python = ">=3.12"
 dependencies = [
@@ -16,6 +16,7 @@ dependencies = [
     "segno>=1.6",
     "cryptography>=43",
     "asyncssh>=2.17",
+    "pyjwt[crypto]>=2.9",
 ]
 
 [project.optional-dependencies]

@@ -5,12 +5,24 @@ from __future__ import annotations
 import secrets
 from datetime import datetime
 from typing import Annotated, Literal
+from urllib.parse import urlencode
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel, Field
 
 from app import audit
-from app.auth.deps import COOKIE, actor, admin_session, auth_service, client_ip, session
+from app.auth.deps import (
+    COOKIE,
+    Principal,
+    actor,
+    admin_session,
+    auth_service,
+    client_ip,
+    session,
+    viewer,
+)
+from app.auth.oidc import STATE_COOKIE, OidcClient, OidcError
 from app.auth.service import AuthError, Pending, Role, SessionInfo, _aware
 from app.core.crypto import token_hash
 from app.core.ratelimit import RateLimiter
@@ -38,6 +50,7 @@ Username = Annotated[str, Field(min_length=1, max_length=64, pattern=r"^[A-Za-z0
 class Me(BaseModel):
     username: str
     role: str
+    auth_source: str = "local"
     totp_enabled: bool
     totp_required: bool
     must_change_password: bool
@@ -71,6 +84,7 @@ class TotpDisable(BaseModel):
 
 def _me(request: Request, info: SessionInfo) -> Me:
     return Me(username=info.user.username, role=info.user.role,
+              auth_source=info.user.auth_source,
               totp_enabled=info.user.totp_enabled,
               totp_required=info.user.role in request.app.state.settings.totp_roles,
               must_change_password=info.user.must_change_password, pending=info.pending,
@@ -413,3 +427,111 @@ async def revoke_key(request: Request, key_id: int,
     await audit.record(request.app.state.db, actor(request, info), "apikey.revoke", "ok",
                        target=row.name)
     return ApiKeyView.model_validate(row, from_attributes=True)
+
+
+# --- OIDC single sign-on --------------------------------------------------------------------------
+
+oidc_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+class Providers(BaseModel):
+    local: bool = True
+    oidc: bool
+    oidc_label: str | None
+
+
+@oidc_router.get("/providers", response_model=Providers, summary="Login methods (public)")
+async def providers(request: Request) -> Providers:
+    s = request.app.state.settings
+    return Providers(oidc=s.oidc_enabled, oidc_label=s.oidc_button_label if s.oidc_enabled
+                     else None)
+
+
+def _redirect_uri(request: Request) -> str:
+    s = request.app.state.settings
+    if s.oidc_redirect_url:
+        return s.oidc_redirect_url
+    base = s.dashboard_url.rstrip("/") or str(request.base_url).rstrip("/")
+    return f"{base}/api/v1/auth/oidc/callback"
+
+
+def _oidc(request: Request) -> OidcClient:
+    client = getattr(request.app.state, "oidc", None)
+    if client is None:
+        raise HTTPException(404, "OIDC ist nicht konfiguriert")
+    return client
+
+
+@oidc_router.get("/oidc/login", include_in_schema=False)
+async def oidc_login(request: Request, next: str = "/") -> RedirectResponse:  # noqa: A002
+    try:
+        url, cookie = await _oidc(request).start(_redirect_uri(request), next)
+    except OidcError as exc:
+        return _login_error(str(exc))
+    resp = RedirectResponse(url, status_code=302)
+    # SameSite=Lax: the callback is a top-level navigation coming back from the IdP.
+    resp.set_cookie(STATE_COOKIE, cookie, max_age=600, httponly=True, samesite="lax",
+                    secure=_cookie_secure(request), path="/api/v1/auth/oidc")
+    return resp
+
+
+def _login_error(message: str) -> RedirectResponse:
+    return RedirectResponse(f"/login?{urlencode({'error': message})}", status_code=302)
+
+
+@oidc_router.get("/oidc/callback", include_in_schema=False)
+async def oidc_callback(request: Request, code: str = "", state: str = "",
+                        error: str = "", error_description: str = "") -> RedirectResponse:
+    db = request.app.state.db
+    ip = client_ip(request)
+    if error:
+        return _login_error(f"Identity Provider: {error_description or error}")
+    try:
+        ident, next_path = await _oidc(request).finish(code, state,
+                                                       request.cookies.get(STATE_COOKIE))
+    except OidcError as exc:
+        await audit.record(db, audit.Actor(name="oidc", ip=ip), "auth.oidc", "error",
+                           message=str(exc))
+        return _login_error(str(exc))
+    if ident.role is None:
+        await audit.record(db, audit.Actor(name=ident.username, ip=ip), "auth.oidc", "denied",
+                           message=f"keine passende Gruppe: {', '.join(ident.groups) or '-'}")
+        return _login_error("Dein Konto hat keine Berechtigung für das Dashboard "
+                            "(keine passende Gruppe).")
+    svc = auth_service(request)
+    try:
+        user = await svc.login_oidc(ident.sub, ident.username, ident.role,
+                                    request.app.state.settings.oidc_link_existing)
+    except AuthError as exc:
+        await audit.record(db, audit.Actor(name=ident.username, ip=ip), "auth.oidc", "denied",
+                           message=str(exc))
+        return _login_error(str(exc))
+    token = await svc.create_session(user, ip, request.headers.get("user-agent"))
+    await audit.record(db, audit.Actor(name=user.username, role=user.role, ip=ip), "auth.oidc",
+                       "ok", params={"groups": ident.groups[:20]})
+    resp = RedirectResponse(next_path, status_code=302)
+    resp.set_cookie(COOKIE, token, httponly=True, samesite="strict", path="/",
+                    secure=_cookie_secure(request),
+                    max_age=int(request.app.state.settings.session_max_hours * 3600))
+    resp.delete_cookie(STATE_COOKIE, path="/api/v1/auth/oidc")
+    return resp
+
+
+# --- identity for tools (session or API key) ------------------------------------------------------
+
+whoami_router = APIRouter(prefix="/api/v1/auth", tags=["auth"])
+
+
+class WhoAmI(BaseModel):
+    name: str
+    role: str
+    kind: str
+    scopes: list[str]
+
+
+@whoami_router.get("/whoami", response_model=WhoAmI,
+                   summary="Who is calling (works with API keys, e.g. for the MCP server)")
+async def whoami(p: Principal = viewer) -> WhoAmI:
+    scopes = {"viewer": ["read"], "operator": ["read", "control"],
+              "admin": ["read", "control", "admin"]}.get(p.role, [])
+    return WhoAmI(name=p.name, role=p.role, kind=p.kind, scopes=scopes)

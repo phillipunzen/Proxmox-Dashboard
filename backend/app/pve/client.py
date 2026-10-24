@@ -125,12 +125,19 @@ class PveClient:
         await self._http.aclose()
 
 
-def _form(data: dict[str, Any] | None) -> dict[str, str] | None:
-    """PVE expects form fields; booleans as 0/1, None values dropped."""
+def _form(data: dict[str, Any] | None) -> dict[str, Any] | None:
+    """PVE expects form fields; booleans as 0/1, None dropped, lists as repeated fields."""
     if not data:
         return None
-    return {k: str(int(v)) if isinstance(v, bool) else str(v) for k, v in data.items()
-            if v is not None}
+    out: dict[str, Any] = {}
+    for k, v in data.items():
+        if v is None:
+            continue
+        if isinstance(v, list):
+            out[k] = [str(x) for x in v]
+        else:
+            out[k] = str(int(v)) if isinstance(v, bool) else str(v)
+    return out
 
 
 def _error_text(resp: httpx.Response) -> str:

@@ -4,6 +4,7 @@
 	import { live } from '#lib/live.svelte.js';
 	import { bytes, pct, rate, ratio, uptime } from '#lib/format.js';
 	import GuestActions from '#lib/components/GuestActions.svelte';
+	import GuestOsUpdates from '#lib/components/GuestOsUpdates.svelte';
 	import HistoryCharts from '#lib/components/HistoryCharts.svelte';
 	import Kpi from '#lib/components/Kpi.svelte';
 	import RangePicker from '#lib/components/RangePicker.svelte';
@@ -63,6 +64,7 @@
 	</div>
 
 	<div class="mt-4"><GuestActions {guest} /></div>
+	{#if live.meta?.guest_updates}<div class="mt-4"><GuestOsUpdates {guest} /></div>{/if}
 
 	{#if live.meta?.history}
 		<div class="card mt-4">

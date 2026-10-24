@@ -133,6 +133,37 @@ class Settings(BaseSettings):
     # Public URL of the dashboard, used for links in notifications (e.g. https://pve-dash.lan).
     dashboard_url: str = ""
 
+    # --- OIDC single sign-on (optional, e.g. Authentik, Keycloak, Cloudflare Access) ------------
+    # Issuer URL, e.g. https://auth.example.com/application/o/pve-dashboard/ - empty = disabled.
+    oidc_issuer: str = ""
+    oidc_client_id: str = ""
+    oidc_client_secret: SecretStr = SecretStr("")
+    oidc_scopes: str = "openid profile email groups"
+    oidc_username_claim: str = "preferred_username"
+    oidc_groups_claim: str = "groups"
+    # Comma-separated IdP groups per dashboard role. Empty viewer list = every IdP user may view.
+    oidc_admin_groups: str = ""
+    oidc_operator_groups: str = ""
+    oidc_viewer_groups: str = ""
+    oidc_button_label: str = "Mit SSO anmelden"
+    # Callback URL registered at the IdP. Empty = DASHBOARD_URL + /api/v1/auth/oidc/callback.
+    oidc_redirect_url: str = ""
+    # Allow an IdP login to take over an existing *local* user with the same name.
+    oidc_link_existing: bool = False
+
+    @property
+    def oidc_enabled(self) -> bool:
+        return bool(self.oidc_issuer and self.oidc_client_id)
+
+    # Package updates inside guests (QGA for VMs, pct exec for LXC). Debian/Ubuntu only.
+    guest_updates: bool = False
+
+    # --- backups (phase 5) ----------------------------------------------------------------------
+    # A guest counts as "backed up" if its newest backup is younger than this.
+    backup_max_age_hours: float = Field(default=48.0, ge=1.0)
+    # Seconds between reading backup lists and snapshots.
+    backup_refresh_interval: float = Field(default=900.0, ge=60.0)
+
     @property
     def totp_roles(self) -> set[str]:
         return {r.strip() for r in self.totp_required_roles.split(",") if r.strip()}

@@ -50,6 +50,9 @@ class User(Base):
     locked_until: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)
     created_at: Mapped[datetime] = mapped_column(UTCDateTime(), default=utcnow)
     last_login_at: Mapped[datetime | None] = mapped_column(UTCDateTime(), default=None)
+    # "local" (password + TOTP) or "oidc" (login only via the identity provider)
+    auth_source: Mapped[str] = mapped_column(String(16), default="local")
+    oidc_sub: Mapped[str | None] = mapped_column(String(255), default=None, index=True)
 
 
 class Session(Base):
@@ -188,3 +191,12 @@ class NotificationChannel(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     min_severity: Mapped[str] = mapped_column(String(16), default="warning")
     send_resolved: Mapped[bool] = mapped_column(Boolean, default=True)
+
+
+class KeyValue(Base):
+    """Small internal key/value store (schema version, seeded defaults, ...)."""
+
+    __tablename__ = "kv"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[dict[str, Any]] = mapped_column(JSON, default=dict)

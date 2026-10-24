@@ -240,7 +240,9 @@ def handle(mock: MockPveClient, path: str, params: dict[str, Any]) -> Any:
         raise PveError(500, "No QEMU guest agent configured", path)
     if what == "agent/get-osinfo":
         os_name = QEMU_EXTRA.get(g.name, {}).get("os", "Debian GNU/Linux 13 (trixie)")
-        return {"result": {"pretty-name": os_name, "name": os_name.split()[0],
+        os_id = ("mswindows" if "Windows" in os_name else "freebsd" if "FreeBSD" in os_name
+                 else "haos" if "Home Assistant" in os_name else "debian")
+        return {"result": {"pretty-name": os_name, "name": os_name.split()[0], "id": os_id,
                            "kernel-release": "6.12.48+deb13-amd64"}}
     if what == "agent/network-get-interfaces":
         return {"result": [

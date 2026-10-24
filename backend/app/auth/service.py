@@ -85,7 +85,8 @@ class AuthService:
             now = utcnow()
             locked = user is not None and (_aware(user.locked_until) or now) > now
             ok = verify_password(user.password_hash if user else None, password)
-            if user is None or user.disabled or locked or not ok:
+            sso_only = user is not None and user.auth_source == "oidc"
+            if user is None or user.disabled or locked or not ok or sso_only:
                 if user is not None and not locked and not ok:
                     user.failed_logins += 1
                     if user.failed_logins >= MAX_FAILED_LOGINS:
@@ -102,6 +103,8 @@ class AuthService:
             return user
 
     def pending_for(self, user: User, mfa_ok: bool) -> Pending:
+        if user.auth_source == "oidc":
+            return None  # MFA and password policy are the identity provider's job
         if user.totp_enabled and not mfa_ok:
             return "totp"
         if not user.totp_enabled and user.role in self.settings.totp_roles:
@@ -110,12 +113,35 @@ class AuthService:
             return "password_change"
         return None
 
+    async def login_oidc(self, sub: str, username: str, role: str, link_existing: bool) -> User:
+        """Find or create the user for an IdP identity; role follows the IdP groups."""
+        async with self.db.session() as s:
+            user = await s.scalar(select(User).where(User.oidc_sub == sub))
+            if user is None:
+                user = await s.scalar(select(User).where(User.username == username))
+                if user is not None and user.auth_source != "oidc" and not link_existing:
+                    raise AuthError(f"Lokaler Benutzer '{username}' existiert bereits – "
+                                    "OIDC_LINK_EXISTING=true setzen, um ihn zu verknüpfen")
+                if user is None:
+                    user = User(username=username, role=role,
+                                password_hash=hash_password(secrets.token_urlsafe(32)))
+                    s.add(user)
+                user.oidc_sub = sub
+                user.auth_source = "oidc"
+            if user.disabled:
+                raise AuthError("Benutzer ist deaktiviert")
+            user.role = role
+            user.must_change_password = False
+            await s.commit()
+            return user
+
     async def create_session(self, user: User, ip: str | None, user_agent: str | None) -> str:
         token = new_token()
         now = utcnow()
         async with self.db.session() as s:
             s.add(Session(id=token_hash(token), user_id=user.id, csrf_token=new_token(),
-                          mfa_ok=not user.totp_enabled, created_at=now, last_seen_at=now,
+                          mfa_ok=not user.totp_enabled or user.auth_source == "oidc",
+                          created_at=now, last_seen_at=now,
                           expires_at=now + timedelta(hours=self.settings.session_max_hours),
                           ip=ip, user_agent=(user_agent or "")[:255]))
             u = await s.get(User, user.id)

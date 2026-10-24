@@ -33,6 +33,8 @@ class Context:
     reboot_required: dict[tuple[str, str], bool]
     # (cluster, "<vmid>" or "node:<node>" for multi-guest jobs) -> error text
     failed_backups: dict[tuple[str, str], str]
+    backups: list[Any] = field(default_factory=list)  # GuestBackups
+    forecasts: list[Any] = field(default_factory=list)  # StorageForecast
 
 
 class MetricInfo(BaseModel):
@@ -255,3 +257,45 @@ def matches(selector: dict[str, Any], attrs: dict[str, Any]) -> bool:
 def compare(value: float, op: str, threshold: float) -> bool:
     return {">": value > threshold, ">=": value >= threshold, "<": value < threshold,
             "<=": value <= threshold}.get(op, False)
+
+
+# --- backups, snapshots, forecast (from the backup service) ------------------------------------
+
+
+@metric("backup_age_hours", "Letztes Backup älter als (Stunden)", "hours", "guest", ">", 48)
+def _backup_age(ctx: Context) -> Iterator[Sample]:
+    for b in ctx.backups:
+        if not b.covered_by:  # guests no job covers are reported by backup_not_covered
+            continue
+        age = b.age_hours if b.age_hours is not None else 99999.0
+        detail = "noch nie gesichert" if b.age_hours is None else None
+        yield Sample(f"guest/{b.cluster}/{b.vmid}", age, f"{b.vmid} {b.name}",
+                     {"cluster": b.cluster, "node": b.node, "vmid": b.vmid, "detail": detail})
+
+
+@metric("backup_not_covered", "Gast von keinem Backup-Job erfasst", "bool", "guest")
+def _not_covered(ctx: Context) -> Iterator[Sample]:
+    for b in ctx.backups:
+        yield Sample(f"guest/{b.cluster}/{b.vmid}", 0 if b.covered_by else 1,
+                     f"{b.vmid} {b.name}", {"cluster": b.cluster, "node": b.node,
+                                             "vmid": b.vmid})
+
+
+@metric("snapshot_age_days", "Ältester Snapshot (Tage)", "days", "guest", ">", 30)
+def _snapshot_age(ctx: Context) -> Iterator[Sample]:
+    for b in ctx.backups:
+        if b.oldest_snapshot_days is not None:
+            yield Sample(f"guest/{b.cluster}/{b.vmid}", b.oldest_snapshot_days,
+                         f"{b.vmid} {b.name}", {"cluster": b.cluster, "node": b.node,
+                                                 "vmid": b.vmid})
+
+
+@metric("storage_days_until_full", "Storage voll in (Tagen, Prognose)", "days", "storage", "<",
+        14)
+def _storage_full(ctx: Context) -> Iterator[Sample]:
+    for f in ctx.forecasts:
+        if f.days_until_full is not None:
+            yield Sample(f"storage/{f.cluster}/{f.node}/{f.storage}", f.days_until_full,
+                         f"Storage {f.storage}" + ("" if f.node == "shared" else f" auf {f.node}"),
+                         {"cluster": f.cluster, "node": None if f.node == "shared" else f.node,
+                          "storage": f.storage})

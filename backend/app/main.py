@@ -10,6 +10,7 @@ import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
+import httpx
 from fastapi import Depends, FastAPI
 
 from app import __version__
@@ -19,8 +20,9 @@ from app.alerts.notify import Notifier
 from app.api import prometheus
 from app.api.v1.actions import router as actions_router
 from app.api.v1.alerts import router as alerts_router
-from app.api.v1.auth import Limiters, keys_router, users_router
+from app.api.v1.auth import Limiters, keys_router, oidc_router, users_router, whoami_router
 from app.api.v1.auth import router as auth_router
+from app.api.v1.backups import router as backups_router
 from app.api.v1.history import router as history_router
 from app.api.v1.inventory import router as inventory_router
 from app.api.v1.nodes import router as nodes_router
@@ -28,7 +30,9 @@ from app.api.v1.routes import public_router
 from app.api.v1.routes import router as v1_router
 from app.auth.apikeys import ApiKeyService
 from app.auth.deps import require_role
+from app.auth.oidc import OidcClient
 from app.auth.service import AuthService
+from app.backups.service import BackupService
 from app.collector.poller import Collector
 from app.collector.state import SnapshotStore
 from app.config import ClusterConfig, Settings, get_settings, load_clusters, mock_clusters
@@ -37,6 +41,7 @@ from app.core.web import OriginCheckMiddleware, SecurityHeadersMiddleware, mount
 from app.db.engine import Database
 from app.inventory.collector import InventoryCollector, InventoryStore
 from app.jobs import JobManager
+from app.nodes.guest_updates import GuestUpdateService
 from app.nodes.service import NodeService
 from app.pve import (
     MockPveClient,
@@ -75,7 +80,8 @@ def create_app(settings: Settings | None = None,
                clients: dict[str, PveApi] | None = None,
                tsdb_client: TsdbClient | None = None,
                ssh_runner: SshRunner | None = None,
-               notifier: Notifier | None = None) -> FastAPI:
+               notifier: Notifier | None = None,
+               oidc_transport: httpx.AsyncBaseTransport | None = None) -> FastAPI:
     """Application factory. Tests inject settings, (mock) clients, TSDB client, SSH runner."""
     settings = settings or get_settings()
     logging.basicConfig(level=settings.log_level.upper(),
@@ -90,6 +96,8 @@ def create_app(settings: Settings | None = None,
         enc = app.state.encryptor = Encryptor(key)
         auth = app.state.auth = AuthService(db, settings, enc)
         app.state.api_keys = ApiKeyService(db)
+        app.state.oidc = (OidcClient(settings, key, oidc_transport)
+                          if settings.oidc_enabled else None)
         generated = await auth.bootstrap_admin()
         if generated:
             # Printed once; the admin has to change it at the first login.
@@ -140,10 +148,16 @@ def create_app(settings: Settings | None = None,
                                               app.state.store, db, jobs, ssh)
         nodes.start()
         inventory.mainboard = nodes.mainboard
+        app.state.guest_updates = GuestUpdateService(nodes, settings.guest_updates)
 
         alerts = app.state.alerts = AlertEngine(db, settings, app.state.store, app.state.inventory,
                                                 nodes, cl, enc, notifier)
         await alerts.seed_defaults()
+        backups = app.state.backups = BackupService(
+            app.state.store, cl, tsdb, settings.backup_refresh_interval,
+            settings.backup_max_age_hours)
+        backups.start()
+        alerts.backups = backups
         alerts.start()
         mode = "READ-ONLY" if settings.read_only else ("DRY-RUN" if settings.dry_run else "LIVE")
         log.info("Control actions: %s (operator token for: %s)", mode,
@@ -154,6 +168,7 @@ def create_app(settings: Settings | None = None,
             for task in background:
                 task.cancel()
             await alerts.stop()
+            await backups.stop()
             await nodes.stop()
             await jobs.shutdown()
             await watcher.stop()
@@ -164,6 +179,8 @@ def create_app(settings: Settings | None = None,
                     await extra.aclose()
             if tsdb:
                 await tsdb.aclose()
+            if app.state.oidc:
+                await app.state.oidc.aclose()
             await db.dispose()
 
     app = FastAPI(
@@ -182,6 +199,7 @@ def create_app(settings: Settings | None = None,
     app.state.tsdb = None
     app.state.inventory = InventoryStore()
     app.state.limiters = Limiters()
+    app.state.oidc = None
     app.add_middleware(SecurityHeadersMiddleware)
     app.add_middleware(OriginCheckMiddleware)
 
@@ -189,6 +207,8 @@ def create_app(settings: Settings | None = None,
     logged_in = [Depends(require_role("viewer"))]
     app.include_router(public_router)
     app.include_router(auth_router)
+    app.include_router(oidc_router)
+    app.include_router(whoami_router)
     app.include_router(users_router)
     app.include_router(keys_router)
     app.include_router(v1_router, dependencies=logged_in)
@@ -197,6 +217,7 @@ def create_app(settings: Settings | None = None,
     app.include_router(actions_router)
     app.include_router(nodes_router)
     app.include_router(alerts_router)
+    app.include_router(backups_router)
     app.include_router(prometheus.make_router(settings.metrics_public))
     if not mount_spa(app, settings.static_dir):
         log.info("No frontend build at %s - serving API only", settings.static_dir)
