@@ -1,6 +1,6 @@
 [project]
 name = "pve-dashboard-mcp"
-version = "1.0.0"
+version = "1.0.1"
 description = "MCP server exposing the Proxmox Dashboard API to AI assistants"
 requires-python = ">=3.12"
 dependencies = [

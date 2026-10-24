@@ -112,7 +112,7 @@ async def resolve_guest(client: DashboardClient, guest: str,
 
 def build_server(client: DashboardClient, scopes: list[str]) -> MCPServer:
     mcp = MCPServer("proxmox-dashboard", title="Proxmox Dashboard",
-                    instructions=INSTRUCTIONS, version="1.0.0")
+                    instructions=INSTRUCTIONS, version="1.0.1")
     ro = ToolAnnotations(read_only_hint=True, open_world_hint=False)
 
     # --- read -----------------------------------------------------------------------------

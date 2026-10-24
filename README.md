@@ -2,7 +2,7 @@
 
 Selbst gehostetes Dashboard für Proxmox-VE-Cluster und Standalone-Hosts. Es zeigt die Auslastung von Nodes und Gästen, beantwortet die Frage „Woher kommt die Last?“, inventarisiert die Hardware, überwacht Backups und Storage, alarmiert bei Problemen und erlaubt eine abgesicherte Steuerung. Dazu kommen eine dokumentierte REST-API, ein Prometheus-Endpunkt und ein MCP-Server für KI-Assistenten.
 
-**Version 1.0.0** · Backend Python 3.13 / FastAPI · Frontend SvelteKit 3 / Svelte 5 / Tailwind 4 / ECharts · VictoriaMetrics für die Historie · SQLite für Benutzer, Audit-Log und Regeln
+**Version 1.0.1** · Backend Python 3.13 / FastAPI · Frontend SvelteKit 3 / Svelte 5 / Tailwind 4 / ECharts · VictoriaMetrics für die Historie · SQLite für Benutzer, Audit-Log und Regeln
 
 [![CI](https://github.com/phillipunzen/Proxmox-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/phillipunzen/Proxmox-Dashboard/actions/workflows/ci.yml)
 
@@ -10,7 +10,7 @@ Selbst gehostetes Dashboard für Proxmox-VE-Cluster und Standalone-Hosts. Es zei
 - `ghcr.io/phillipunzen/proxmox-dashboard`
 - `ghcr.io/phillipunzen/proxmox-dashboard-mcp`
 
-Tags: `latest` (main), `1.0.0` / `1.0` / `1` (Releases), `sha-…`.
+Tags: `latest` (main), `1.0.1` / `1.0` / `1` (Releases), `sha-…`.
 
 ---
 
@@ -112,7 +112,7 @@ cd /opt/proxmox-dashboard
 cp .env.example .env && chmod 600 .env
 ```
 
-Das Repository brauchst du für `docker-compose.yml` und die Skripte in `deploy/`. Die Images selbst kommen fertig gebaut von ghcr.io. Für vorhersehbare Updates pinnst du die Version in `.env`: `DASHBOARD_VERSION=1.0.0`. Der Standard `latest` folgt dem main-Branch.
+Das Repository brauchst du für `docker-compose.yml` und die Skripte in `deploy/`. Die Images selbst kommen fertig gebaut von ghcr.io. Für vorhersehbare Updates pinnst du die Version in `.env`: `DASHBOARD_VERSION=1.0.1`. Der Standard `latest` folgt dem main-Branch.
 
 1. **Rollen und Tokens anlegen**, siehe [nächster Abschnitt](#proxmox-rollen-und-tokens).
 2. **`.env` ausfüllen:**
@@ -489,7 +489,7 @@ docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
 - Pushes auf `main` und Tags `v*` bauen danach beide Images für amd64 und arm64 und veröffentlichen sie auf ghcr.io. Ein neues Release erstellst du so:
 
 ```bash
-git tag v1.0.1 && git push origin v1.0.1
+git tag v1.1.0 && git push origin v1.1.0
 ```
 
 **Tests:** 120 Backend-Tests mit pytest, gegen den Mock-Cluster, einen gemockten Identity-Provider und VictoriaMetrics, dazu 8 Tests für den MCP-Server.

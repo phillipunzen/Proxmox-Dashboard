@@ -1,6 +1,6 @@
 [project]
 name = "proxmox-dashboard"
-version = "1.0.0"
+version = "1.0.1"
 description = "Self-hosted Proxmox VE cluster dashboard with monitoring API"
 requires-python = ">=3.12"
 dependencies = [
