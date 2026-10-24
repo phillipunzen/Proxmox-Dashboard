@@ -10,6 +10,8 @@ services:
     ports:
       - "${DASHBOARD_PORT:-8080}:8000"
     volumes:
+      # Users, sessions, audit log (SQLite) and the generated secret key
+      - app-data:/data
       # Optional: CA certificate of your Proxmox cluster (PVE_n_CA_FILE=/certs/pve-root-ca.pem)
       - ./certs:/certs:ro
     depends_on:
@@ -46,4 +48,5 @@ services:
     logging: *logging
 
 volumes:
+  app-data:
   vm-data:

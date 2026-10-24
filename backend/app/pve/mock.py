@@ -21,6 +21,7 @@ from typing import Any
 
 from app.pve import mock_inventory
 from app.pve.client import PveError
+from app.pve.mock_actions import MockActions
 
 GiB = 1024**3
 
@@ -174,6 +175,7 @@ class MockPveClient:
         self.started = clock() - 86400 * 12.3  # pretend the cluster booted ~12 days ago
         self.seed = seed
         self._fill_storage()
+        self.actions = MockActions(self)
 
     # -- value generators ----------------------------------------------------------------------
     # All generators accept an optional timestamp so the history backfill can reuse them.
@@ -266,8 +268,22 @@ class MockPveClient:
         m = re.fullmatch(r"/nodes/([^/]+)/status", path)
         if m:
             return self._node_status(m.group(1))
+        for handler in (self.actions.get, lambda p, q: mock_inventory.handle(self, p, q)):
+            try:
+                return handler(path, params or {})
+            except LookupError:
+                continue
+        raise PveError(501, "Not implemented in mock", path)
+
+    async def post(self, path: str, data: dict[str, Any] | None = None) -> Any:
         try:
-            return mock_inventory.handle(self, path, params or {})
+            return self.actions.post("/" + path.strip("/"), data or {})
+        except LookupError:
+            raise PveError(501, "Not implemented in mock", path) from None
+
+    async def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        try:
+            return self.actions.delete("/" + path.strip("/"), params or {})
         except LookupError:
             raise PveError(501, "Not implemented in mock", path) from None
 
@@ -275,6 +291,7 @@ class MockPveClient:
         return None
 
     def _resources(self, rtype: str | None) -> list[dict[str, Any]]:
+        self.actions.advance()
         out: list[dict[str, Any]] = []
         uptime = int(self.clock() - self.started)
         if rtype in (None, "node"):

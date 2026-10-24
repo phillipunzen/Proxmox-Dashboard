@@ -1,4 +1,7 @@
 // Small fetch helper for the dashboard API.
+//
+// Write requests carry the CSRF token of the session (X-CSRF-Token). A 401 anywhere means the
+// session is gone: the registered handler sends the user back to the login page.
 
 export class ApiError extends Error {
 	constructor(
@@ -11,6 +14,17 @@ export class ApiError extends Error {
 
 type Params = Record<string, string | number | boolean | null | undefined | string[]>;
 
+let csrfToken = '';
+let onUnauthorized: (() => void) | null = null;
+
+export function setCsrfToken(token: string) {
+	csrfToken = token;
+}
+
+export function setUnauthorizedHandler(fn: () => void) {
+	onUnauthorized = fn;
+}
+
 export function url(path: string, params: Params = {}): string {
 	const qs = new URLSearchParams();
 	for (const [k, v] of Object.entries(params)) {
@@ -22,26 +36,48 @@ export function url(path: string, params: Params = {}): string {
 	return q ? `${path}?${q}` : path;
 }
 
-export async function getJson<T>(path: string, params: Params = {}, signal?: AbortSignal): Promise<T> {
-	const res = await fetch(url(path, params), { signal, headers: { Accept: 'application/json' } });
+async function handle<T>(res: Response, path: string): Promise<T> {
+	if (res.status === 401 && !path.startsWith('/api/v1/auth/')) onUnauthorized?.();
 	if (!res.ok) {
-		let detail = res.statusText;
+		let detail: unknown = res.statusText;
 		try {
 			detail = (await res.json()).detail ?? detail;
 		} catch {
 			/* not JSON */
 		}
-		throw new ApiError(res.status, typeof detail === 'string' ? detail : JSON.stringify(detail));
+		// FastAPI validation errors come as a list.
+		const msg = Array.isArray(detail)
+			? detail.map((d) => d.msg ?? JSON.stringify(d)).join('; ')
+			: typeof detail === 'string'
+				? detail
+				: JSON.stringify(detail);
+		throw new ApiError(res.status, msg);
 	}
+	if (res.status === 204) return undefined as T;
 	return res.json() as Promise<T>;
 }
 
-export async function postJson<T>(path: string, body?: unknown): Promise<T> {
-	const res = await fetch(path, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+export async function getJson<T>(path: string, params: Params = {}, signal?: AbortSignal): Promise<T> {
+	const res = await fetch(url(path, params), { signal, headers: { Accept: 'application/json' } });
+	return handle<T>(res, path);
+}
+
+export async function send<T>(
+	method: 'POST' | 'PATCH' | 'DELETE',
+	path: string,
+	body?: unknown,
+	params: Params = {}
+): Promise<T> {
+	const res = await fetch(url(path, params), {
+		method,
+		headers: {
+			Accept: 'application/json',
+			'X-CSRF-Token': csrfToken,
+			...(body === undefined ? {} : { 'Content-Type': 'application/json' })
+		},
 		body: body === undefined ? undefined : JSON.stringify(body)
 	});
-	if (!res.ok) throw new ApiError(res.status, res.statusText);
-	return res.json() as Promise<T>;
+	return handle<T>(res, path);
 }
+
+export const postJson = <T>(path: string, body?: unknown) => send<T>('POST', path, body);

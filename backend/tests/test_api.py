@@ -3,7 +3,6 @@
 import asyncio
 import json
 
-import httpx
 import pytest
 
 from app.collector.poller import ClusterPoller
@@ -11,6 +10,7 @@ from app.config import mock_clusters
 from app.main import create_app
 from app.pve import MockPveClient
 from app.pve.client import PveUnavailable
+from tests.conftest import client_for, logged_in
 
 
 @pytest.fixture
@@ -23,8 +23,7 @@ async def app(settings, clock):
 
 @pytest.fixture
 async def api(app):
-    transport = httpx.ASGITransport(app=app)
-    async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
+    async with logged_in(app) as client:
         yield client
 
 
@@ -32,7 +31,15 @@ async def test_meta_and_health(api):
     meta = (await api.get("/api/v1/meta")).json()
     assert meta["mock"] is True and meta["read_only"] is True
     assert meta["clusters"] == ["homelab", "standalone"]
-    assert (await api.get("/api/v1/health")).json()["status"] == "ok"
+    assert (await api.get("/api/v1/health")).json() == {"status": "ok"}
+
+
+async def test_data_endpoints_require_login(app):
+    async with client_for(app) as anon:
+        assert (await anon.get("/api/v1/health")).status_code == 200  # public
+        for path in ("/api/v1/meta", "/api/v1/clusters", "/api/v1/guests", "/api/v1/stream",
+                     "/api/v1/inventory", "/api/v1/analysis/allocation", "/api/v1/tasks"):
+            assert (await anon.get(path)).status_code == 401, path
 
 
 async def test_clusters_overview_matches_mock_inventory(api):
@@ -99,6 +106,8 @@ async def test_openapi_documents_v1(api):
 
 
 async def test_sse_stream_sends_snapshot(app):
+    async with logged_in(app) as c:
+        cookie = f"pvd_session={c.cookies['pvd_session']}".encode()
     # httpx' ASGITransport buffers whole responses, so drive the ASGI app directly.
     received: list[bytes] = []
     done = asyncio.Event()
@@ -113,7 +122,8 @@ async def test_sse_stream_sends_snapshot(app):
             done.set()
 
     scope = {"type": "http", "method": "GET", "path": "/api/v1/stream", "raw_path": b"",
-             "query_string": b"", "headers": [], "http_version": "1.1", "scheme": "http",
+             "query_string": b"", "headers": [(b"cookie", cookie)], "http_version": "1.1",
+             "scheme": "http",
              "server": ("test", 80), "client": ("test", 1), "root_path": "", "app": app}
     await asyncio.wait_for(app(scope, receive, send), timeout=5)
     text = received[0].decode()

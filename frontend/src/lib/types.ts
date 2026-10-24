@@ -123,6 +123,7 @@ export interface Meta {
 	version: string;
 	mock: boolean;
 	read_only: boolean;
+	dry_run: boolean;
 	poll_interval: number;
 	history: boolean;
 	clusters: string[];

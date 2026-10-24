@@ -6,9 +6,10 @@ import base64
 import hashlib
 import re
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import Response
@@ -26,8 +27,25 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         h.setdefault("X-Frame-Options", "DENY")
         h.setdefault("Referrer-Policy", "same-origin")
         h.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
-        h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
+        if request.url.scheme == "https":  # browsers ignore (and warn about) COOP over http
+            h.setdefault("Cross-Origin-Opener-Policy", "same-origin")
         return response
+
+
+class OriginCheckMiddleware(BaseHTTPMiddleware):
+    """Reject cross-site write requests: if a browser sends an Origin, it must be our host.
+
+    Complements SameSite=Strict cookies and the CSRF token (defence in depth). Requests
+    without Origin (curl, scripts) are left to the CSRF/auth checks.
+    """
+
+    async def dispatch(self, request: Request, call_next: RequestResponseEndpoint) -> Response:
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            origin = request.headers.get("origin")
+            host = request.headers.get("x-forwarded-host") or request.headers.get("host")
+            if origin and origin != "null" and urlsplit(origin).netloc != host:
+                return JSONResponse({"detail": "Cross-Origin-Anfrage abgelehnt"}, status_code=403)
+        return await call_next(request)
 
 
 def spa_csp(index_html: str) -> str:

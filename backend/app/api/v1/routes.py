@@ -11,6 +11,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from app import __version__
+from app.auth.deps import COOKIE
 from app.collector.models import (
     ClusterSnapshot,
     ClusterWarning,
@@ -21,6 +22,8 @@ from app.collector.models import (
 from app.collector.state import SnapshotStore
 
 router = APIRouter(prefix="/api/v1")
+# Unauthenticated: only the container health check.
+public_router = APIRouter(prefix="/api/v1")
 
 SSE_HEARTBEAT = 15.0
 
@@ -47,6 +50,7 @@ class Meta(BaseModel):
     version: str
     mock: bool
     read_only: bool
+    dry_run: bool
     poll_interval: float
     history: bool
     clusters: list[str]
@@ -54,22 +58,21 @@ class Meta(BaseModel):
 
 class Health(BaseModel):
     status: Literal["ok", "degraded"]
-    clusters: dict[str, bool]
 
 
 @router.get("/meta", response_model=Meta, tags=["meta"])
 async def meta(request: Request) -> Meta:
     s = request.app.state.settings
-    return Meta(version=__version__, mock=s.pve_mock, read_only=s.read_only,
+    return Meta(version=__version__, mock=s.pve_mock, read_only=s.read_only, dry_run=s.dry_run,
                 poll_interval=s.poll_interval, history=request.app.state.tsdb is not None,
                 clusters=[c.name for c in _store(request).all()])
 
 
-@router.get("/health", response_model=Health, tags=["meta"])
+@public_router.get("/health", response_model=Health, tags=["meta"])
 async def health(request: Request) -> Health:
-    """Liveness/readiness: ``degraded`` if any cluster is unreachable."""
-    reach = {c.name: c.reachable for c in _store(request).all()}
-    return Health(status="ok" if all(reach.values()) else "degraded", clusters=reach)
+    """Liveness/readiness without details: ``degraded`` if any cluster is unreachable."""
+    ok = all(c.reachable for c in _store(request).all())
+    return Health(status="ok" if ok else "degraded")
 
 
 # --- clusters -------------------------------------------------------------------------------
@@ -201,6 +204,9 @@ async def list_storage(request: Request, cluster: str | None = None,
 async def stream(request: Request) -> StreamingResponse:
     store = _store(request)
 
+    auth = request.app.state.auth
+    token = request.cookies.get(COOKIE)
+
     async def events() -> AsyncIterator[str]:
         version = -1
         while True:
@@ -208,6 +214,11 @@ async def stream(request: Request) -> StreamingResponse:
                 break
             changed = await store.wait_for_change(version, SSE_HEARTBEAT)
             if not changed:
+                # Long-lived stream: end it when the session expired or was revoked.
+                info = await auth.resolve(token)
+                if info is None or info.pending:
+                    yield "event: logout\ndata: {}\n\n"
+                    break
                 yield ": keepalive\n\n"
                 continue
             version = store.version

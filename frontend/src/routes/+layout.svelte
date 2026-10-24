@@ -2,20 +2,30 @@
 	import '../app.css';
 	import favicon from '#lib/assets/favicon.svg';
 	import { onMount } from 'svelte';
+	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import { setUnauthorizedHandler } from '#lib/api.js';
+	import { auth, type Role } from '#lib/auth.svelte.js';
 	import { live } from '#lib/live.svelte.js';
 	import { timeAgo } from '#lib/format.js';
+	import { taskViewer } from '#lib/toast.svelte.js';
+	import TaskLogDialog from '#lib/components/TaskLogDialog.svelte';
+	import Toasts from '#lib/components/Toasts.svelte';
 	import type { LayoutProps } from './$types';
 
 	let { children }: LayoutProps = $props();
 
-	const nav = [
+	const nav: { href: string; label: string; icon: string; role?: Role }[] = [
 		{ href: '/', label: 'Übersicht', icon: 'M3 12l9-9 9 9M5 10v10h14V10' },
 		{ href: '/nodes', label: 'Nodes', icon: 'M4 5h16v5H4zM4 14h16v5H4zM8 7.5h.01M8 16.5h.01' },
 		{ href: '/guests', label: 'Gäste', icon: 'M4 6h16M4 12h16M4 18h16' },
 		{ href: '/analysis', label: 'Lastanalyse', icon: 'M4 20V10M10 20V4M16 20v-7M22 20H2' },
-		{ href: '/inventory', label: 'Inventar', icon: 'M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7M12 11v10' }
+		{ href: '/inventory', label: 'Inventar', icon: 'M3 7l9-4 9 4-9 4-9-4zM3 7v10l9 4 9-4V7M12 11v10' },
+		{ href: '/tasks', label: 'Aufgaben', icon: 'M9 6h11M9 12h11M9 18h11M4 6l1 1 2-2M4 12l1 1 2-2M4 18l1 1 2-2' },
+		{ href: '/audit', label: 'Audit-Log', icon: 'M12 3l8 3v6c0 5-3.5 8-8 9-4.5-1-8-4-8-9V6l8-3z' },
+		{ href: '/admin/users', label: 'Benutzer', icon: 'M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1M9 10a3 3 0 1 0 0-6 3 3 0 0 0 0 6M22 19v-1a4 4 0 0 0-3-3.9M16 4.1a3 3 0 0 1 0 5.8', role: 'admin' }
 	];
+	const isLogin = $derived(page.url.pathname === '/login');
 
 	let dark = $state(true);
 	let now = $state(Date.now());
@@ -29,13 +39,36 @@
 			/* storage blocked */
 		}
 		document.documentElement.classList.toggle('dark', dark);
-		live.start();
+		const toLogin = () => {
+			live.stop();
+			auth.set(null);
+			if (page.url.pathname !== '/login') goto(`/login?next=${encodeURIComponent(page.url.pathname + page.url.search)}`);
+		};
+		setUnauthorizedHandler(toLogin);
+		live.onlogout = toLogin;
+		auth.load();
 		const timer = setInterval(() => (now = Date.now()), 1000);
 		return () => {
 			clearInterval(timer);
 			live.stop();
 		};
 	});
+
+	// Gate: everything except /login needs a complete session; the stream starts after login.
+	$effect(() => {
+		if (!auth.checked || isLogin) return;
+		if (!auth.ready) {
+			goto(`/login?next=${encodeURIComponent(page.url.pathname + page.url.search)}`);
+		} else {
+			live.start();
+		}
+	});
+
+	async function logout() {
+		live.stop();
+		await auth.logout();
+		goto('/login');
+	}
 
 	function toggleTheme() {
 		dark = !dark;
@@ -67,6 +100,11 @@
 	<link rel="icon" href={favicon} />
 </svelte:head>
 
+{#if isLogin}
+	{@render children()}
+{:else if !auth.ready}
+	<div class="flex min-h-dvh items-center justify-center text-sm text-zinc-500">Lade …</div>
+{:else}
 <div class="flex min-h-dvh">
 	<!-- Sidebar (desktop) / drawer (mobile) -->
 	<aside
@@ -78,7 +116,7 @@
 			<span class="font-semibold">PVE Dashboard</span>
 		</div>
 		<nav class="flex flex-col gap-1 p-2">
-			{#each nav as item (item.href)}
+			{#each nav.filter((n) => !n.role || auth.can(n.role)) as item (item.href)}
 				<a
 					href={item.href}
 					onclick={() => (menuOpen = false)}
@@ -97,7 +135,7 @@
 		</nav>
 		<div class="absolute right-0 bottom-0 left-0 p-4 text-xs text-zinc-500">
 			v{live.meta?.version ?? '–'}
-			{#if live.meta?.read_only}· nur lesend{/if}
+			{#if live.meta?.read_only}· nur lesend{:else if live.meta?.dry_run}· Dry-Run{/if}
 		</div>
 	</aside>
 	{#if menuOpen}
@@ -149,6 +187,11 @@
 						{live.connected ? (stale ? 'veraltet' : 'live') : 'getrennt'} · {timeAgo(newest, now)}
 					</span>
 				</span>
+				<a href="/account" class="flex items-center gap-1.5 rounded-lg px-2 py-1 hover:bg-zinc-200 dark:hover:bg-zinc-800" title="Mein Konto">
+					<span class="font-medium text-zinc-700 dark:text-zinc-300">{auth.me?.username}</span>
+					<span class="hidden rounded bg-zinc-200 px-1.5 py-0.5 text-[10px] uppercase sm:inline dark:bg-zinc-800">{auth.me?.role}</span>
+				</a>
+				<button class="rounded-lg px-2 py-1 hover:bg-zinc-200 dark:hover:bg-zinc-800" onclick={logout}>Abmelden</button>
 				<button
 					class="rounded-lg p-1.5 hover:bg-zinc-200 dark:hover:bg-zinc-800"
 					onclick={toggleTheme}
@@ -174,3 +217,9 @@
 		</main>
 	</div>
 </div>
+{/if}
+
+<Toasts />
+{#if taskViewer.current}
+	<TaskLogDialog cluster={taskViewer.current.cluster} upid={taskViewer.current.upid} onclose={() => taskViewer.close()} />
+{/if}

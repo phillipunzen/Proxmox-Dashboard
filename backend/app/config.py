@@ -42,7 +42,15 @@ class ClusterConfig(BaseModel):
     timeout: float = 10.0
     # Base URL of the Proxmox web UI used for console deep links. Defaults to urls[0].
     web_url: str | None = None
+    # Second token with the Dashboard-Operator role. Without it, control actions are disabled.
+    operator_token_id: str = ""
+    operator_token_secret: SecretStr = SecretStr("")
     mock: bool = False
+
+    @property
+    def has_operator_token(self) -> bool:
+        return self.mock or bool(self.operator_token_id and
+                                 self.operator_token_secret.get_secret_value())
 
     @field_validator("urls")
     @classmethod
@@ -67,8 +75,10 @@ class Settings(BaseSettings):
     poll_interval: float = Field(default=10.0, ge=2.0, le=300.0)
     # Slow poll: per-node /nodes/{node}/status for kernel, load average, swap ... (seconds).
     node_status_interval: float = Field(default=30.0, ge=5.0, le=3600.0)
-    # Global safety switch. Phase 1 is read-only regardless; kept for later phases.
+    # Global safety switch: no control actions at all.
     read_only: bool = True
+    # Control actions are validated and written to the audit log, but not sent to Proxmox.
+    dry_run: bool = False
     log_level: str = "INFO"
     # Directory containing the built SvelteKit SPA. Empty/nonexistent = API only.
     static_dir: str = "/app/static"
@@ -78,6 +88,25 @@ class Settings(BaseSettings):
     mock_backfill: bool = True
     # Seconds between hardware/config inventory refreshes (disks, NICs, PCI, guest configs).
     inventory_interval: float = Field(default=900.0, ge=60.0, le=86400.0)
+
+    # --- persistence & auth ---------------------------------------------------------------------
+    # Users, sessions and the audit log (SQLite) live here; mount it as a volume.
+    data_dir: str = "/data"
+    # Encrypts TOTP secrets at rest. Empty = generated once and stored in <data_dir>/secret.key.
+    app_secret_key: SecretStr = SecretStr("")
+    # First start without users: create this admin. Empty password = random, printed to the log.
+    admin_username: str = "admin"
+    admin_password: SecretStr = SecretStr("")
+    # Roles that must use TOTP (comma separated; empty = optional for everyone).
+    totp_required_roles: str = "admin,operator"
+    session_max_hours: float = Field(default=12.0, ge=0.25, le=720.0)
+    session_idle_minutes: float = Field(default=120.0, ge=5.0, le=10080.0)
+    # "auto" = Secure cookie when the request arrived via HTTPS (also behind a reverse proxy).
+    cookie_secure: str = Field(default="auto", pattern="^(auto|true|false)$")
+
+    @property
+    def totp_roles(self) -> set[str]:
+        return {r.strip() for r in self.totp_required_roles.split(",") if r.strip()}
 
 
 def load_clusters(environ: Mapping[str, str] | None = None) -> list[ClusterConfig]:
@@ -103,6 +132,8 @@ def load_clusters(environ: Mapping[str, str] | None = None) -> list[ClusterConfi
                 ca_file=g.get("CA_FILE") or None,
                 timeout=float(g.get("TIMEOUT", "10")),
                 web_url=g.get("WEB_URL") or None,
+                operator_token_id=g.get("OPERATOR_TOKEN_ID", ""),
+                operator_token_secret=SecretStr(g.get("OPERATOR_TOKEN_SECRET", "")),
             )
         )
 

@@ -3,6 +3,7 @@
 	import { getJson } from '#lib/api.js';
 	import { live } from '#lib/live.svelte.js';
 	import { bytes, pct, rate, ratio, uptime } from '#lib/format.js';
+	import GuestActions from '#lib/components/GuestActions.svelte';
 	import HistoryCharts from '#lib/components/HistoryCharts.svelte';
 	import Kpi from '#lib/components/Kpi.svelte';
 	import RangePicker from '#lib/components/RangePicker.svelte';
@@ -60,6 +61,8 @@
 		<Kpi label="Netz ein / aus" value={rate(guest.netin_bps)} sub="↑ {rate(guest.netout_bps)}" />
 		<Kpi label="Uptime" value={running ? uptime(guest.uptime) : '–'} sub={guest.lock ? `Lock: ${guest.lock}` : ''} />
 	</div>
+
+	<div class="mt-4"><GuestActions {guest} /></div>
 
 	{#if live.meta?.history}
 		<div class="card mt-4">

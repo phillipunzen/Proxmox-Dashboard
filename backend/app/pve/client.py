@@ -40,6 +40,10 @@ class PveApi(Protocol):
 
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
 
+    async def post(self, path: str, data: dict[str, Any] | None = None) -> Any: ...
+
+    async def delete(self, path: str, params: dict[str, Any] | None = None) -> Any: ...
+
     async def aclose(self) -> None: ...
 
 
@@ -72,7 +76,15 @@ class PveClient:
     async def get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         return await self._request("GET", path, params=params)
 
-    async def _request(self, method: str, path: str, **kwargs: Any) -> Any:
+    async def post(self, path: str, data: dict[str, Any] | None = None) -> Any:
+        """Write call. Never retried on another node: the first may have executed it."""
+        return await self._request("POST", path, data=_form(data), failover_5xx=False)
+
+    async def delete(self, path: str, params: dict[str, Any] | None = None) -> Any:
+        return await self._request("DELETE", path, params=params, failover_5xx=False)
+
+    async def _request(self, method: str, path: str, failover_5xx: bool = True,
+                       **kwargs: Any) -> Any:
         if not path.startswith("/"):
             path = "/" + path
         urls = self.cfg.urls
@@ -86,9 +98,14 @@ class PveClient:
             except httpx.TransportError as exc:
                 log.warning("PVE %s unreachable (%s): %s", urls[idx], type(exc).__name__, exc)
                 last_exc = exc
+                # A write that may have reached the server (e.g. read timeout) must not be
+                # repeated on another node. Only "never connected" is safe to retry.
+                if not failover_5xx and not isinstance(exc, (httpx.ConnectError,
+                                                              httpx.ConnectTimeout)):
+                    raise PveUnavailable(f"{method} {path}: Ergebnis unbekannt ({exc})") from exc
                 continue
 
-            if resp.status_code >= 500 and len(urls) > 1:
+            if resp.status_code >= 500 and len(urls) > 1 and failover_5xx:
                 # A node in trouble (e.g. pveproxy restarting) - try the next one.
                 last_exc = PveError(resp.status_code, resp.reason_phrase, path)
                 continue
@@ -106,6 +123,14 @@ class PveClient:
 
     async def aclose(self) -> None:
         await self._http.aclose()
+
+
+def _form(data: dict[str, Any] | None) -> dict[str, str] | None:
+    """PVE expects form fields; booleans as 0/1, None values dropped."""
+    if not data:
+        return None
+    return {k: str(int(v)) if isinstance(v, bool) else str(v) for k, v in data.items()
+            if v is not None}
 
 
 def _error_text(resp: httpx.Response) -> str:

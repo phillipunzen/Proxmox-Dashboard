@@ -27,6 +27,8 @@ class LiveState {
 	history = $state.raw<Record<string, Point[]>>({});
 
 	#source: EventSource | null = null;
+	/** Called when the server ends the stream because the session expired. */
+	onlogout: (() => void) | null = null;
 
 	get visible(): ClusterSnapshot[] {
 		return this.selected ? this.clusters.filter((c) => c.name === this.selected) : this.clusters;
@@ -43,6 +45,10 @@ class LiveState {
 		const source = new EventSource('/api/v1/stream');
 		source.onopen = () => (this.connected = true);
 		source.onerror = () => (this.connected = false); // EventSource reconnects by itself
+		source.addEventListener('logout', () => {
+			this.stop();
+			this.onlogout?.();
+		});
 		source.addEventListener('snapshot', (ev) => {
 			const payload = JSON.parse((ev as MessageEvent).data) as { clusters: ClusterSnapshot[] };
 			this.connected = true;
@@ -56,6 +62,7 @@ class LiveState {
 	stop() {
 		this.#source?.close();
 		this.#source = null;
+		this.connected = false;
 	}
 
 	#record(clusters: ClusterSnapshot[]) {

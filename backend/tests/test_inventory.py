@@ -1,6 +1,5 @@
 import asyncio
 
-import httpx
 import pytest
 
 from app.config import mock_clusters
@@ -9,6 +8,7 @@ from app.inventory.export import rows, to_csv
 from app.inventory.models import GuestInventory
 from app.main import create_app
 from app.pve import MockPveClient
+from tests.conftest import logged_in
 
 GiB = 1024**3
 
@@ -147,8 +147,7 @@ async def api(settings, clock):
     app = create_app(settings, clients=clients)
     async with app.router.lifespan_context(app):
         await app.state.inventory_collector.refresh()  # wait for the first run
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
+        async with logged_in(app) as client:
             yield client
 
 

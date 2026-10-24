@@ -14,6 +14,7 @@ from app.services.analysis import (
     vmid_regex,
 )
 from app.tsdb.client import Series, TsdbClient
+from tests.conftest import logged_in
 
 VM = "http://vm:8428"
 
@@ -80,10 +81,12 @@ async def api_with_vm(settings, clock):
     app = create_app(settings, clients=clients, tsdb_client=tsdb)
     with respx.mock(assert_all_called=False) as mock:
         mock.post(f"{VM}/api/v1/import/prometheus").mock(return_value=httpx.Response(204))
-        async with app.router.lifespan_context(app):
-            transport = httpx.ASGITransport(app=app)
-            async with httpx.AsyncClient(transport=transport, base_url="http://t") as client:
-                yield client, mock
+        mock.get(f"{VM}/api/v1/query", params={"query": "count_over_time(pve_cluster_cpus[30d])"}
+                 ).mock(return_value=httpx.Response(200, json={
+                     "status": "success", "data": {"resultType": "vector", "result": []}}))
+        mock.post(f"{VM}/api/v1/import/prometheus").mock(return_value=httpx.Response(204))
+        async with app.router.lifespan_context(app), logged_in(app) as client:
+            yield client, mock
 
 
 def _matrix(*series):
@@ -150,15 +153,13 @@ async def test_ranking_at_and_top(api_with_vm):
 async def test_history_without_tsdb_returns_503(settings, clock):
     clients = {c.name: MockPveClient(c.name, clock=clock) for c in mock_clusters()}
     app = create_app(settings, clients=clients)
-    async with app.router.lifespan_context(app):
-        transport = httpx.ASGITransport(app=app)
-        async with httpx.AsyncClient(transport=transport, base_url="http://t") as api:
-            r = await api.get("/api/v1/history/clusters/homelab")
-            assert r.status_code == 503
-            assert (await api.get("/api/v1/meta")).json()["history"] is False
-            # allocation works from the snapshot alone
-            alloc = (await api.get("/api/v1/analysis/allocation")).json()
-            assert {a["node"] for a in alloc} == {"pve1", "pve2", "pve3", "edge"}
+    async with app.router.lifespan_context(app), logged_in(app) as api:
+        r = await api.get("/api/v1/history/clusters/homelab")
+        assert r.status_code == 503
+        assert (await api.get("/api/v1/meta")).json()["history"] is False
+        # allocation works from the snapshot alone
+        alloc = (await api.get("/api/v1/analysis/allocation")).json()
+        assert {a["node"] for a in alloc} == {"pve1", "pve2", "pve3", "edge"}
 
 
 async def test_tsdb_down_gives_502(api_with_vm):
