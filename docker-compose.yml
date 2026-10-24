@@ -1,7 +1,8 @@
 services:
   dashboard:
-    build: .
-    image: proxmox-dashboard:latest
+    # Prebuilt multi-arch image (amd64/arm64) from GitHub Actions. Pin a version in .env
+    # (DASHBOARD_VERSION=1.0.0) for predictable updates. Local build: see docker-compose.build.yml
+    image: ghcr.io/phillipunzen/proxmox-dashboard:${DASHBOARD_VERSION:-latest}
     container_name: proxmox-dashboard
     restart: unless-stopped
     env_file: .env
@@ -49,8 +50,7 @@ services:
 
   # Optional MCP server for AI assistants:  docker compose --profile mcp up -d
   mcp:
-    build: ./mcp-server
-    image: proxmox-dashboard-mcp:latest
+    image: ghcr.io/phillipunzen/proxmox-dashboard-mcp:${DASHBOARD_VERSION:-latest}
     container_name: proxmox-dashboard-mcp
     profiles: ["mcp"]
     restart: unless-stopped

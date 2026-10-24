@@ -1,6 +1,7 @@
 # pve-dashboard-mcp
 
-MCP server (Model Context Protocol, SDK 2.x) for the Proxmox Dashboard. It talks only to the
+MCP server (Model Context Protocol, SDK 2.x) for the Proxmox Dashboard.
+Image: `ghcr.io/phillipunzen/proxmox-dashboard-mcp`. It talks only to the
 dashboard REST API with an API key - see the main README, section "MCP-Server für KI-Assistenten".
 
 ```bash

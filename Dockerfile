@@ -1,7 +1,8 @@
 # syntax=docker/dockerfile:1
 
 # --- Stage 1: build the SvelteKit SPA ---------------------------------------------------------
-FROM node:22-alpine AS frontend
+# Static files are platform independent: build once on the native builder platform.
+FROM --platform=$BUILDPLATFORM node:22-alpine AS frontend
 WORKDIR /src
 COPY frontend/package.json frontend/package-lock.json ./
 RUN npm ci --no-audit --no-fund

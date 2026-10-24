@@ -4,6 +4,14 @@ Selbst gehostetes Dashboard für Proxmox-VE-Cluster und Standalone-Hosts. Es zei
 
 **Version 1.0.0** · Backend Python 3.13 / FastAPI · Frontend SvelteKit 3 / Svelte 5 / Tailwind 4 / ECharts · VictoriaMetrics für die Historie · SQLite für Benutzer, Audit-Log und Regeln
 
+[![CI](https://github.com/phillipunzen/Proxmox-Dashboard/actions/workflows/ci.yml/badge.svg)](https://github.com/phillipunzen/Proxmox-Dashboard/actions/workflows/ci.yml)
+
+**Images (amd64 + arm64):**
+- `ghcr.io/phillipunzen/proxmox-dashboard`
+- `ghcr.io/phillipunzen/proxmox-dashboard-mcp`
+
+Tags: `latest` (main), `1.0.0` / `1.0` / `1` (Releases), `sha-…`.
+
 ---
 
 ## Inhalt
@@ -75,9 +83,10 @@ Selbst gehostetes Dashboard für Proxmox-VE-Cluster und Standalone-Hosts. Es zei
 ## Schnellstart mit Beispieldaten
 
 ```bash
+git clone https://github.com/phillipunzen/Proxmox-Dashboard.git && cd Proxmox-Dashboard
 cp .env.example .env
 sed -i 's/^PVE_MOCK=false/PVE_MOCK=true/; s/^READ_ONLY=true/READ_ONLY=false/' .env
-docker compose up -d --build
+docker compose up -d                                    # lädt die fertigen Images von ghcr.io
 docker compose logs dashboard | grep "Initial admin"   # Startpasswort
 ```
 
@@ -98,9 +107,12 @@ Dann `http://<host>:8080` öffnen und als `admin` mit dem Startpasswort anmelden
 - Netzwerkzugriff auf Port 8006 der Nodes, für SSH-Funktionen zusätzlich auf Port 22.
 
 ```bash
-git clone <repo> /opt/proxmox-dashboard && cd /opt/proxmox-dashboard
+git clone https://github.com/phillipunzen/Proxmox-Dashboard.git /opt/proxmox-dashboard
+cd /opt/proxmox-dashboard
 cp .env.example .env && chmod 600 .env
 ```
+
+Das Repository brauchst du für `docker-compose.yml` und die Skripte in `deploy/`. Die Images selbst kommen fertig gebaut von ghcr.io. Für vorhersehbare Updates pinnst du die Version in `.env`: `DASHBOARD_VERSION=1.0.0`. Der Standard `latest` folgt dem main-Branch.
 
 1. **Rollen und Tokens anlegen**, siehe [nächster Abschnitt](#proxmox-rollen-und-tokens).
 2. **`.env` ausfüllen:**
@@ -114,7 +126,7 @@ cp .env.example .env && chmod 600 .env
    In `.env` trägst du dann `PVE_1_CA_FILE=/certs/pve-root-ca.pem` ein. `PVE_1_VERIFY_TLS=false` ist nur eine Notlösung.
 4. **Starten:**
    ```bash
-   docker compose up -d --build
+   docker compose up -d
    docker compose logs dashboard | grep "Initial admin"
    ```
 5. **Hinter einem Reverse-Proxy** (Traefik, Caddy, NPM):
@@ -410,13 +422,14 @@ Das Skript stoppt das Dashboard, ersetzt die Daten (und mit Historie im Archiv a
 ```bash
 cd /opt/proxmox-dashboard
 bash deploy/backup.sh                 # immer zuerst
-git pull
-docker compose build --pull
+git pull                              # neue Compose-Datei und Skripte
+# bei gepinnter Version: DASHBOARD_VERSION in .env anheben
+docker compose pull
 docker compose up -d
 docker compose logs -f dashboard
 ```
 
-- **Schema-Änderungen:** werden beim Start automatisch und rein additiv angewendet (neue Tabellen und Spalten, keine Datenumschreibung). Ein Rückweg ist mit `git checkout <alte Version>` plus Restore möglich.
+- **Schema-Änderungen:** werden beim Start automatisch und rein additiv angewendet (neue Tabellen und Spalten, keine Datenumschreibung). Für den Rückweg setzt du `DASHBOARD_VERSION` auf die alte Version und spielst das Backup zurück.
 - **VictoriaMetrics:** ist im Compose-File auf eine feste Version gepinnt. Aktualisiere sie bewusst und lies dazu die Release Notes.
 - **Ändern sich die Node-Skripte** (`deploy/node-setup.sh`, `deploy/pve-setup-roles.sh`), führst du sie erneut aus. Sie sind idempotent.
 
@@ -426,6 +439,7 @@ Alle Einstellungen kommen aus der `.env`. Eine vollständige, kommentierte Vorla
 
 | Variable | Standard | Bedeutung |
 |---|---|---|
+| `DASHBOARD_VERSION` | `latest` | Image-Tag auf ghcr.io (z. B. `1.0.0`) |
 | `PVE_<n>_NAME/URLS/TOKEN_ID/TOKEN_SECRET` | – | Cluster bzw. Host (mehrere URLs = Failover) |
 | `PVE_<n>_OPERATOR_TOKEN_*`, `PVE_<n>_NODEADMIN_TOKEN_*` | – | Tokens für Steuerung und Node-Verwaltung |
 | `PVE_<n>_VERIFY_TLS`, `PVE_<n>_CA_FILE` | `true`, – | TLS-Prüfung, eigene CA |
@@ -465,6 +479,17 @@ npm run check && npm run build
 
 # MCP-Server
 cd mcp-server && python3 -m venv .venv && .venv/bin/pip install -e '.[dev]' && .venv/bin/pytest
+
+# Eigene Images lokal bauen statt von ghcr.io laden
+docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+```
+
+**CI** (`.github/workflows/ci.yml`):
+- Jeder Push und jeder Pull Request führt die Backend-Tests, die MCP-Tests sowie Type-Check und Build des Frontends aus.
+- Pushes auf `main` und Tags `v*` bauen danach beide Images für amd64 und arm64 und veröffentlichen sie auf ghcr.io. Ein neues Release erstellst du so:
+
+```bash
+git tag v1.0.1 && git push origin v1.0.1
 ```
 
 **Tests:** 120 Backend-Tests mit pytest, gegen den Mock-Cluster, einen gemockten Identity-Provider und VictoriaMetrics, dazu 8 Tests für den MCP-Server.
@@ -489,6 +514,7 @@ backend/app/
 frontend/src/             SvelteKit-SPA (routes/, lib/components/)
 mcp-server/               MCP-Server (pve_dashboard_mcp/)
 deploy/                   pve-setup-roles.sh · node-setup.sh · backup.sh · restore.sh
+.github/workflows/ci.yml  Tests + Multi-Arch-Images nach ghcr.io
 ```
 
 ## Fehlersuche

@@ -1,0 +1,9 @@
+# Build the images locally instead of pulling them from ghcr.io (development, own changes):
+#   docker compose -f docker-compose.yml -f docker-compose.build.yml up -d --build
+services:
+  dashboard:
+    build: .
+    image: proxmox-dashboard:local
+  mcp:
+    build: ./mcp-server
+    image: proxmox-dashboard-mcp:local
